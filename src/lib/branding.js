@@ -44,9 +44,27 @@ export function rememberedBrandCondo() {
   return localStorage.getItem(BRAND_KEY) || '';
 }
 
+export function appOrigin() {
+  const configured = String(import.meta.env.VITE_APP_URL || '').trim().replace(/\/+$/, '');
+  if (configured) return configured;
+  if (typeof window !== 'undefined') return window.location.origin;
+  return '';
+}
+
+export function appUrl(path) {
+  const origin = appOrigin();
+  const suffix = String(path || '').replace(/^\/+/, '');
+  return origin ? `${origin}/${suffix}` : `/${suffix}`;
+}
+
 export function loginUrlDoCondominio(condoId) {
-  if (!condoId || typeof window === 'undefined') return '';
-  return `${window.location.origin}/login/${condoId}`;
+  if (!condoId) return '';
+  return appUrl(`login/${condoId}`);
+}
+
+export function conviteUrl(token) {
+  if (!token) return '';
+  return appUrl(`convite/${token}`);
 }
 
 async function signPath(path) {

@@ -147,12 +147,19 @@ export const PADRAO_COMPLETO = [
 ].join('\n');
 
 export async function copiarTexto(text) {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
+  try {
+    if (navigator.clipboard?.writeText && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+  } catch {
+    /* fallback abaixo */
   }
   const area = document.createElement('textarea');
   area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.position = 'fixed';
+  area.style.left = '-9999px';
   document.body.appendChild(area);
   area.select();
   document.execCommand('copy');

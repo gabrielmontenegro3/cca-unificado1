@@ -4,6 +4,7 @@ import { useSession } from '../lib/session';
 import { CARGO_LABEL, can } from '../lib/permissions';
 import { criarConvite, criarLoginSemTrocarSessao, listarConvites, vincularUsuario } from '../lib/api';
 import { copiarTexto } from '../lib/parseSeed';
+import { conviteUrl } from '../lib/branding';
 import { Alert, Btn, Empty, Field, Page } from '../components/ui';
 
 const CARGOS_CONVITE = ['administrador', 'construtora', 'administracao', 'morador'];
@@ -38,7 +39,7 @@ export function UsuariosPage() {
   useEffect(() => { if (condoId) load(); }, [condoId]);
 
   function inviteUrl(token) {
-    return `${window.location.origin}/convite/${token}`;
+    return conviteUrl(token);
   }
 
   async function onCreate(e) {
