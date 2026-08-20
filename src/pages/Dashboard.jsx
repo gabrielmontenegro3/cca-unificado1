@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase';
 import { useSession } from '../lib/session';
 import { can } from '../lib/permissions';
 import { formatDate, maintenanceTone } from '../lib/format';
-import { Badge, Btn, CoverImage, Empty, Page } from '../components/ui';
+import { Badge, Btn, CoverHero, Empty } from '../components/ui';
 import { Icon } from '../components/icons';
 
 export function DashboardPage() {
@@ -56,68 +56,80 @@ export function DashboardPage() {
 
   if (!can(cargoTipo, 'dashboard_ops')) {
     return (
-      <Page title="Início" lead="Acompanhe o condomínio e seus chamados.">
-        <CoverImage src={branding?.capa || branding?.visaoGeral} alt="Capa" />
-        <div className="row">
-          {can(cargoTipo, 'create_ticket') ? <Btn to="/chamados/novo" icon="plus">Abrir chamado</Btn> : null}
-          <Btn variant="ghost" to="/visao-geral" icon="home">Ver visão geral</Btn>
+      <section className="page page-dashboard">
+        <CoverHero src={branding?.capa || branding?.visaoGeral} alt="Capa" />
+        <div className="page-head">
+          <h1>Início</h1>
+          <p>Acompanhe o condomínio e seus chamados.</p>
         </div>
-      </Page>
+        <div className="page-body">
+          <div className="row">
+            {can(cargoTipo, 'create_ticket') ? <Btn to="/chamados/novo" icon="plus">Abrir chamado</Btn> : null}
+            <Btn variant="ghost" to="/visao-geral" icon="home">Ver visão geral</Btn>
+          </div>
+        </div>
+      </section>
     );
   }
 
   return (
-    <Page title="Dashboard" lead="Indicadores operacionais do condomínio.">
-      <CoverImage src={branding?.capa || branding?.visaoGeral} alt="Capa do condomínio" />
-      <div className="stats">
-        <article className="stat"><span className="stat-label"><Icon name="message" size={15} />Abertos</span><strong>{stats?.aberto ?? '—'}</strong></article>
-        <article className="stat"><span className="stat-label"><Icon name="search" size={15} />Em análise</span><strong>{stats?.analise ?? '—'}</strong></article>
-        <article className="stat"><span className="stat-label"><Icon name="wrench" size={15} />Em execução</span><strong>{stats?.execucao ?? '—'}</strong></article>
-        <article className="stat"><span className="stat-label"><Icon name="check" size={15} />Resolvidos</span><strong>{stats?.resolvido ?? '—'}</strong></article>
+    <section className="page page-dashboard">
+      <CoverHero src={branding?.capa || branding?.visaoGeral} alt="Capa do condomínio" />
+      <div className="page-head">
+        <h1>Dashboard</h1>
+        <p>Indicadores operacionais do condomínio.</p>
       </div>
-      <div className="stats">
-        <article className="stat"><span className="stat-label"><Icon name="home" size={15} />Unidades</span><strong>{stats?.unidades ?? '—'}</strong></article>
-        <article className="stat"><span className="stat-label"><Icon name="box" size={15} />Fornecedores</span><strong>{stats?.fornecedores ?? '—'}</strong></article>
-        <article className="stat"><span className="stat-label"><Icon name="layers" size={15} />Materiais</span><strong>{stats?.materiais ?? '—'}</strong></article>
-        <article className="stat"><span className="stat-label"><Icon name="shield" size={15} />Garantias</span><strong>{stats?.garantias ?? '—'}</strong></article>
-      </div>
-      <div className="grid grid-2">
-        <section className="panel">
-          <h2>Chamados recentes</h2>
-          {!chamados.length ? <Empty text="Nenhum chamado ainda." /> : (
-            <div className="table-wrap">
-              <table>
-                <thead><tr><th>Nº</th><th>Título</th><th>Status</th></tr></thead>
-                <tbody>
-                  {chamados.map((c) => (
-                    <tr key={c.id}>
-                      <td><Link to={`/chamados/${c.id}`}>{`ID: ${c.numero_registro}`}</Link></td>
-                      <td>{c.titulo}</td>
-                      <td><Badge value={c.status} /></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-        <section className="panel">
-          <h2>Manutenções</h2>
-          {!manutencoes.length ? <Empty text="Sem manutenções cadastradas." /> : (
-            <div className="stack">
-              {manutencoes.map((m) => (
-                <div key={m.id} className="row" style={{ justifyContent: 'space-between' }}>
-                  <div>
-                    <strong>{m.sistema}</strong>
-                    <div className="muted">{formatDate(m.proxima_execucao)}</div>
+      <div className="page-body">
+        <div className="stats">
+          <article className="stat"><span className="stat-label"><Icon name="message" size={15} />Abertos</span><strong>{stats?.aberto ?? '—'}</strong></article>
+          <article className="stat"><span className="stat-label"><Icon name="search" size={15} />Em análise</span><strong>{stats?.analise ?? '—'}</strong></article>
+          <article className="stat"><span className="stat-label"><Icon name="wrench" size={15} />Em execução</span><strong>{stats?.execucao ?? '—'}</strong></article>
+          <article className="stat"><span className="stat-label"><Icon name="check" size={15} />Resolvidos</span><strong>{stats?.resolvido ?? '—'}</strong></article>
+        </div>
+        <div className="stats">
+          <article className="stat"><span className="stat-label"><Icon name="home" size={15} />Unidades</span><strong>{stats?.unidades ?? '—'}</strong></article>
+          <article className="stat"><span className="stat-label"><Icon name="box" size={15} />Fornecedores</span><strong>{stats?.fornecedores ?? '—'}</strong></article>
+          <article className="stat"><span className="stat-label"><Icon name="layers" size={15} />Materiais</span><strong>{stats?.materiais ?? '—'}</strong></article>
+          <article className="stat"><span className="stat-label"><Icon name="shield" size={15} />Garantias</span><strong>{stats?.garantias ?? '—'}</strong></article>
+        </div>
+        <div className="grid grid-2">
+          <section className="panel">
+            <h2>Chamados recentes</h2>
+            {!chamados.length ? <Empty text="Nenhum chamado ainda." /> : (
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>Nº</th><th>Título</th><th>Status</th></tr></thead>
+                  <tbody>
+                    {chamados.map((c) => (
+                      <tr key={c.id}>
+                        <td><Link to={`/chamados/${c.id}`}>{`ID: ${c.numero_registro}`}</Link></td>
+                        <td>{c.titulo}</td>
+                        <td><Badge value={c.status} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+          <section className="panel">
+            <h2>Manutenções</h2>
+            {!manutencoes.length ? <Empty text="Sem manutenções cadastradas." /> : (
+              <div className="stack">
+                {manutencoes.map((m) => (
+                  <div key={m.id} className="row" style={{ justifyContent: 'space-between' }}>
+                    <div>
+                      <strong>{m.sistema}</strong>
+                      <div className="muted">{formatDate(m.proxima_execucao)}</div>
+                    </div>
+                    <Badge value={maintenanceTone(m)} />
                   </div>
-                  <Badge value={maintenanceTone(m)} />
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
       </div>
-    </Page>
+    </section>
   );
 }

@@ -53,6 +53,15 @@ export function CoverImage({ src, alt }) {
   return <img className="cover-image" src={src} alt={alt || ''} />;
 }
 
+export function CoverHero({ src, alt }) {
+  if (!src) return null;
+  return (
+    <div className="cover-hero">
+      <img src={src} alt={alt || ''} decoding="async" fetchPriority="high" />
+    </div>
+  );
+}
+
 export function Btn({
   as,
   to,

@@ -35,7 +35,7 @@ function Guard({ children }) {
       </div>
     );
   }
-  if (loading) return <div className="auth-wrap">Carregando…</div>;
+  if (loading && !session) return <div className="auth-wrap">Carregando…</div>;
   if (!session) return <Navigate to="/login" replace />;
   if (!membership && !isGestaoTecnica) {
     return (

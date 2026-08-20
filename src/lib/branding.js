@@ -67,8 +67,21 @@ export function conviteUrl(token) {
   return appUrl(`convite/${token}`);
 }
 
-async function signPath(path) {
+const COVER_TRANSFORM = { width: 2560, quality: 92, resize: 'contain' };
+const COMPACT_TRANSFORM = { width: 960, quality: 65, resize: 'contain' };
+
+function transformFor(tipo) {
+  if (tipo === 'capa') return COVER_TRANSFORM;
+  if (tipo === 'logo') return undefined;
+  return COMPACT_TRANSFORM;
+}
+
+async function signPath(path, transform) {
   if (!path || !supabase) return '';
+  if (transform) {
+    const hi = await supabase.storage.from('condominios').createSignedUrl(path, 60 * 60 * 24 * 7, { transform });
+    if (hi.data?.signedUrl) return hi.data.signedUrl;
+  }
   const signed = await supabase.storage.from('condominios').createSignedUrl(path, 60 * 60 * 24 * 7);
   if (signed.data?.signedUrl) return signed.data.signedUrl;
   const file = await supabase.storage.from('condominios').download(path);
@@ -96,7 +109,7 @@ async function fillFromStorageFolder(condoId, brand) {
     const already = tipo === 'visao_geral' ? brand.visaoGeral : brand[tipo];
     if (already) continue;
     for (const ext of BRAND_EXTS) {
-      const url = await signPath(`${condoId}/marca/${tipo}.${ext}`);
+      const url = await signPath(`${condoId}/marca/${tipo}.${ext}`, transformFor(tipo));
       if (!url) continue;
       if (tipo === 'logo') brand.logo = url;
       if (tipo === 'capa') brand.capa = url;
@@ -113,7 +126,7 @@ async function fillFromTables(condoId, brand) {
     supabase.from('imagens_condominio').select('id, titulo, tipo, arquivo_id').eq('condominio_id', condoId),
   ]);
   brand.nome = brand.nome || condo?.nome || '';
-  if (!brand.logo && condo?.logo_path) brand.logo = await signPath(condo.logo_path);
+  if (!brand.logo && condo?.logo_path) brand.logo = await signPath(condo.logo_path, COMPACT_TRANSFORM);
 
   const fileIds = [...new Set((images || []).map((row) => row.arquivo_id).filter(Boolean))];
   let filesById = {};
@@ -126,7 +139,7 @@ async function fillFromTables(condoId, brand) {
     const tipo = tipoDaImagem(row);
     const path = filesById[row.arquivo_id];
     if (!tipo || !path) continue;
-    const url = await signPath(path);
+    const url = await signPath(path, transformFor(tipo));
     if (!url) continue;
     if (tipo === 'logo' && !brand.logo) brand.logo = url;
     if (tipo === 'capa' && !brand.capa) brand.capa = url;
@@ -145,9 +158,9 @@ export async function loadBranding(condoId) {
     brand.nome = row?.nome || brand.nome;
     const paths = applyRpc(brand, row) || {};
     if (paths.logo) brand.logo = await signPath(paths.logo);
-    if (paths.capa) brand.capa = await signPath(paths.capa);
-    if (paths.visao_geral) brand.visaoGeral = await signPath(paths.visao_geral);
-    if (paths.login) brand.login = await signPath(paths.login);
+    if (paths.capa) brand.capa = await signPath(paths.capa, COVER_TRANSFORM);
+    if (paths.visao_geral) brand.visaoGeral = await signPath(paths.visao_geral, COMPACT_TRANSFORM);
+    if (paths.login) brand.login = await signPath(paths.login, COMPACT_TRANSFORM);
   }
 
   if (!brand.logo || !brand.capa || !brand.visaoGeral || !brand.login) {

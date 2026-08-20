@@ -2,6 +2,39 @@
 -- Só Gestão Técnica e administrador gravam nestas tabelas.
 -- Rode o ARQUIVO INTEIRO no SQL Editor.
 
+CREATE OR REPLACE FUNCTION public.pode_gerir_material(p_material_id uuid)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.materiais m
+    WHERE m.id = p_material_id
+      AND (public.user_is_gestao_tecnica() OR public.user_is_gestao(m.condominio_id))
+  );
+$$;
+
+CREATE OR REPLACE FUNCTION public.pode_gerir_garantia(p_garantia_id uuid)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.garantias g
+    WHERE g.id = p_garantia_id
+      AND (public.user_is_gestao_tecnica() OR public.user_is_gestao(g.condominio_id))
+  );
+$$;
+
+GRANT EXECUTE ON FUNCTION public.pode_gerir_material(uuid) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.pode_gerir_garantia(uuid) TO authenticated;
+
 DROP POLICY IF EXISTS forn_select ON public.fornecedores;
 DROP POLICY IF EXISTS forn_write ON public.fornecedores;
 CREATE POLICY forn_select ON public.fornecedores
@@ -135,23 +168,16 @@ CREATE POLICY ml_select ON public.material_locais
     EXISTS (
       SELECT 1 FROM public.materiais m
       WHERE m.id = material_id
-        AND public.user_belongs_to_condominio(m.condominio_id)
+        AND (
+          public.user_belongs_to_condominio(m.condominio_id)
+          OR public.user_is_gestao_tecnica()
+        )
     )
   );
 CREATE POLICY ml_write ON public.material_locais
   FOR ALL TO authenticated
-  USING (
-    EXISTS (
-      SELECT 1 FROM public.materiais m
-      WHERE m.id = material_id AND public.user_is_gestao(m.condominio_id)
-    )
-  )
-  WITH CHECK (
-    EXISTS (
-      SELECT 1 FROM public.materiais m
-      WHERE m.id = material_id AND public.user_is_gestao(m.condominio_id)
-    )
-  );
+  USING (public.pode_gerir_material(material_id))
+  WITH CHECK (public.pode_gerir_material(material_id));
 
 DROP POLICY IF EXISTS mg_all ON public.material_garantias;
 DROP POLICY IF EXISTS mg_select ON public.material_garantias;
@@ -162,22 +188,15 @@ CREATE POLICY mg_select ON public.material_garantias
     EXISTS (
       SELECT 1 FROM public.materiais m
       WHERE m.id = material_id
-        AND public.user_belongs_to_condominio(m.condominio_id)
+        AND (
+          public.user_belongs_to_condominio(m.condominio_id)
+          OR public.user_is_gestao_tecnica()
+        )
     )
   );
 CREATE POLICY mg_write ON public.material_garantias
   FOR ALL TO authenticated
-  USING (
-    EXISTS (
-      SELECT 1 FROM public.materiais m
-      WHERE m.id = material_id AND public.user_is_gestao(m.condominio_id)
-    )
-  )
-  WITH CHECK (
-    EXISTS (
-      SELECT 1 FROM public.materiais m
-      WHERE m.id = material_id AND public.user_is_gestao(m.condominio_id)
-    )
-  );
+  USING (public.pode_gerir_material(material_id))
+  WITH CHECK (public.pode_gerir_material(material_id));
 
 NOTIFY pgrst, 'reload schema';

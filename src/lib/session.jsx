@@ -140,17 +140,20 @@ export function SessionProvider({ children }) {
     }
 
     let active = true;
+    const ready = { current: false };
 
-    async function hydrate(nextSession) {
-      setSession(nextSession);
+    async function hydrate(nextSession, { showLoader = false } = {}) {
       if (!nextSession?.user) {
+        setSession(null);
         setProfile(null);
         setMemberships([]);
         setIsGestaoTecnica(false);
         setLoading(false);
+        ready.current = true;
         return;
       }
-      setLoading(true);
+      setSession(nextSession);
+      if (showLoader && !ready.current) setLoading(true);
       const { data: userRow, error: userErr } = await supabase
         .from('usuarios')
         .select('*')
@@ -174,11 +177,22 @@ export function SessionProvider({ children }) {
       setIsGestaoTecnica(gestao);
       setMemberships(loaded.links || []);
       setLoading(false);
+      ready.current = true;
     }
 
-    supabase.auth.getSession().then(({ data }) => hydrate(data.session));
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => {
-      hydrate(next);
+    supabase.auth.getSession().then(({ data }) => {
+      if (active) hydrate(data.session, { showLoader: true });
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((event, next) => {
+      if (event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+        if (next) setSession(next);
+        return;
+      }
+      if (event === 'INITIAL_SESSION' && ready.current) return;
+      setTimeout(() => {
+        if (!active) return;
+        hydrate(next, { showLoader: !ready.current });
+      }, 0);
     });
     return () => {
       active = false;

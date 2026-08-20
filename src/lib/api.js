@@ -3,7 +3,52 @@ import { fileKind } from './format.js';
 import { buildCondoSeed } from './parseSeed.js';
 import { TIPO_LOCAL } from './permissions.js';
 
-export async function uploadArquivo({ condominioId, userId, file, folder, fileName }) {
+const CAPA_MAX_BYTES = 20 * 1024 * 1024;
+const CAPA_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
+
+async function compactarImagem(file, { maxWidth, quality }) {
+  if (!file?.type?.startsWith('image/') || file.type === 'image/svg+xml') return file;
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, maxWidth / Math.max(bitmap.width, 1));
+    if (scale === 1 && file.size < 700_000) {
+      bitmap.close();
+      return file;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
+    if (!blob || blob.size >= file.size) return file;
+    return new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' });
+  } catch {
+    return file;
+  }
+}
+
+export async function uploadArquivo({ condominioId, userId, file, folder, fileName, quality }) {
+  if (!file) throw new Error('Selecione um arquivo.');
+  const originalQuality = quality === 'original'
+    || (folder === 'marca' && String(fileName || '').toLowerCase().startsWith('capa.'));
+
+  if (originalQuality) {
+    if (!CAPA_TYPES.has(String(file.type || '').toLowerCase()) && !/\.(jpe?g|png|webp)$/i.test(file.name)) {
+      throw new Error('A capa deve ser JPG, PNG ou WebP.');
+    }
+    if (file.size > CAPA_MAX_BYTES) {
+      throw new Error('A capa pode ter até 20 MB para manter a qualidade.');
+    }
+  } else if (file.type?.startsWith('image/') && file.type !== 'image/svg+xml') {
+    const compacted = await compactarImagem(file, { maxWidth: 1600, quality: 0.72 });
+    if (compacted !== file && fileName) {
+      fileName = String(fileName).replace(/\.[^.]+$/, '.jpg');
+    }
+    file = compacted;
+  }
+
   const original = file.name.replace(/[^\w.\-]+/g, '_').slice(0, 80);
   const safeName = fileName || `${crypto.randomUUID()}-${original}`;
   const path = `${condominioId}/${folder}/${safeName}`;
@@ -163,13 +208,19 @@ async function popularCondominioCliente(condoId, seed, userId) {
       });
     }
     if (materialId && localId) {
-      await insertRows('material_locais', [{ material_id: materialId, local_id: localId }]);
+      try {
+        await insertRows('material_locais', [{ material_id: materialId, local_id: localId }]);
+      } catch { /* vínculo complementar */ }
     }
     if (materialId && garantiaId) {
-      await insertRows('material_garantias', [{ material_id: materialId, garantia_id: garantiaId }]);
+      try {
+        await insertRows('material_garantias', [{ material_id: materialId, garantia_id: garantiaId }]);
+      } catch { /* vínculo complementar */ }
     }
     if (fornecedorId && garantiaId) {
-      await insertRows('fornecedor_garantias', [{ fornecedor_id: fornecedorId, garantia_id: garantiaId }]);
+      try {
+        await insertRows('fornecedor_garantias', [{ fornecedor_id: fornecedorId, garantia_id: garantiaId }]);
+      } catch { /* vínculo complementar */ }
     }
   }
 
@@ -203,7 +254,6 @@ export async function criarCondominio(form, userId) {
     p_estado: form.estado || null,
   });
   if (error) throw error;
-
   await popularCondominioCliente(condoId, seed, userId);
 
   async function saveNamedImage(file, folder, titulo, tipo) {
@@ -215,6 +265,7 @@ export async function criarCondominio(form, userId) {
       file,
       folder,
       fileName: tipo ? `${tipo}.${ext}` : undefined,
+      quality: tipo === 'capa' ? 'original' : 'compact',
     });
     const row = {
       condominio_id: condoId,

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSession } from '../lib/session';
 import { can } from '../lib/permissions';
@@ -7,6 +7,8 @@ import { GestaoBar } from '../components/GestaoBar';
 import { Alert, Btn, Empty, Field } from '../components/ui';
 import { PADROES, PADRAO_COMPLETO, copiarTexto } from '../lib/parseSeed';
 import { loginUrlDoCondominio } from '../lib/branding';
+
+const DRAFT_KEY = 'cca.condoFormDraft';
 
 const EMPTY_FORM = {
   nome: '',
@@ -68,8 +70,20 @@ function Section({ title, hint, children }) {
 export function CondominiosPortal() {
   const { cargoTipo, memberships, selectCondo, reloadMemberships, session, error: sessionError } = useSession();
   const navigate = useNavigate();
-  const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState(EMPTY_FORM);
+  const [creating, setCreating] = useState(() => {
+    try {
+      return Boolean(JSON.parse(sessionStorage.getItem(DRAFT_KEY) || '{}').creating);
+    } catch {
+      return false;
+    }
+  });
+  const [form, setForm] = useState(() => {
+    try {
+      return { ...EMPTY_FORM, ...(JSON.parse(sessionStorage.getItem(DRAFT_KEY) || '{}').form || {}) };
+    } catch {
+      return EMPTY_FORM;
+    }
+  });
   const [files, setFiles] = useState({
     logo: null,
     imagem_visao_geral: null,
@@ -81,6 +95,16 @@ export function CondominiosPortal() {
   const [error, setError] = useState('');
   const [ok, setOk] = useState('');
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    sessionStorage.setItem(DRAFT_KEY, JSON.stringify({ creating, form }));
+  }, [creating, form]);
+
+  function clearDraft() {
+    sessionStorage.removeItem(DRAFT_KEY);
+    setForm(EMPTY_FORM);
+    setCreating(false);
+  }
 
   function setField(key, value) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -103,7 +127,6 @@ export function CondominiosPortal() {
     try {
       await criarCondominio({ ...form, ...files }, session.user.id);
       await reloadMemberships();
-      setForm(EMPTY_FORM);
       setFiles({
         logo: null,
         imagem_visao_geral: null,
@@ -112,7 +135,8 @@ export function CondominiosPortal() {
         imagens: [],
         documentos: [],
       });
-      setCreating(false);
+      clearDraft();
+      setOk('Condomínio criado.');
     } catch (err) {
       setError(err.message || 'Não foi possível criar o condomínio.');
     } finally {
@@ -181,7 +205,12 @@ export function CondominiosPortal() {
                   <input type="file" accept="image/*" onChange={(e) => setFile('imagem_visao_geral', e.target.files?.[0] || null)} />
                 </Field>
                 <Field label="Imagem capa">
-                  <input type="file" accept="image/*" onChange={(e) => setFile('imagem_capa', e.target.files?.[0] || null)} />
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+                    onChange={(e) => setFile('imagem_capa', e.target.files?.[0] || null)}
+                  />
+                  <span className="hint">JPG, PNG ou WebP em alta resolução, até 20 MB. Só a capa fica em qualidade máxima.</span>
                 </Field>
                 <Field label="Imagem login">
                   <input type="file" accept="image/*" onChange={(e) => setFile('imagem_login', e.target.files?.[0] || null)} />

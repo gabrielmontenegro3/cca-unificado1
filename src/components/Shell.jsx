@@ -1,4 +1,4 @@
-import { NavLink, Navigate, Outlet, useNavigate } from 'react-router-dom';
+import { NavLink, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useSession } from '../lib/session';
 import { CARGO_LABEL, navFor } from '../lib/permissions';
 import { BrandLogo } from './ui';
@@ -7,7 +7,9 @@ import { Icon, navIconFor } from './icons';
 export function Shell() {
   const { profile, membership, cargoTipo, condo, isGestaoTecnica, condoId, branding, signOut } = useSession();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const items = navFor(cargoTipo);
+  const coverOnTop = pathname === '/painel' || pathname === '/';
 
   if (isGestaoTecnica && !condoId) {
     return <Navigate to="/" replace />;
@@ -55,12 +57,14 @@ export function Shell() {
           </button>
         </div>
       </aside>
-      <div className="main">
-        <header className="topbar">
-          <p className="muted">
-            {profile?.nome} · {CARGO_LABEL[cargoTipo] || cargoTipo}
-          </p>
-        </header>
+      <div className={`main${coverOnTop ? ' main-hero' : ''}`}>
+        {coverOnTop ? null : (
+          <header className="topbar">
+            <p className="muted">
+              {profile?.nome} · {CARGO_LABEL[cargoTipo] || cargoTipo}
+            </p>
+          </header>
+        )}
         <div className="content">
           <Outlet />
         </div>

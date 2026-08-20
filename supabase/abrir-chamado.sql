@@ -55,7 +55,8 @@ STABLE
 SECURITY DEFINER
 SET search_path = public
 AS $$
-  SELECT public.user_cargo_tipo(cid) IN (
+  SELECT public.user_is_gestao_tecnica()
+  OR public.user_cargo_tipo(cid) IN (
     'administrador'::public.tipo_cargo,
     'gestao_tecnica'::public.tipo_cargo,
     'administracao'::public.tipo_cargo
@@ -69,7 +70,8 @@ STABLE
 SECURITY DEFINER
 SET search_path = public
 AS $$
-  SELECT public.user_cargo_tipo(cid) IN (
+  SELECT public.user_is_gestao_tecnica()
+  OR public.user_cargo_tipo(cid) IN (
     'administrador'::public.tipo_cargo,
     'gestao_tecnica'::public.tipo_cargo
   );

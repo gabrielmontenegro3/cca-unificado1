@@ -2,8 +2,10 @@
 -- Rode o ARQUIVO INTEIRO no SQL Editor.
 
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-VALUES ('condominios', 'condominios', false, 52428800, NULL)
-ON CONFLICT (id) DO NOTHING;
+VALUES ('condominios', 'condominios', false, 26214400, NULL)
+ON CONFLICT (id) DO UPDATE
+SET file_size_limit = 26214400,
+    allowed_mime_types = NULL;
 
 DROP POLICY IF EXISTS storage_condo_select ON storage.objects;
 DROP POLICY IF EXISTS storage_condo_insert ON storage.objects;
