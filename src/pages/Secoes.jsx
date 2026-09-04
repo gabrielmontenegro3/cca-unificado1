@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase';
 import { useSession } from '../lib/session';
 import { Alert, Btn, CoverHero, CoverImage, Empty, Field, Page } from '../components/ui';
 import { EditTelaButton, useEditTela } from '../components/EditTela';
+import { VisaoGeralPainel } from '../components/VisaoGeralPainel';
 
 export function SecoesPage({ table, title, lead, extra, cover, hero = false }) {
   const { condoId, branding } = useSession();
@@ -60,20 +61,22 @@ export function SecoesPage({ table, title, lead, extra, cover, hero = false }) {
     <>
       <Alert error={error} />
       {extra}
-      <div className="stack secoes-list">
-        {rows.map((row) => (
-          <article key={row.id} className="secao-block">
-            <div className="secao-block-head">
-              <h2>{row.titulo || 'Seção'}</h2>
-              {editable ? (
-                <Btn variant="ghost" icon="x" onClick={() => remove(row.id)}>Excluir</Btn>
-              ) : null}
-            </div>
-            <p>{row.texto}</p>
-          </article>
-        ))}
-        {!rows.length ? <Empty text="Nenhuma seção cadastrada." /> : null}
-      </div>
+      {table === 'visao_geral_secoes' ? <VisaoGeralPainel /> : null}
+      {rows.length ? (
+        <div className="stack secoes-list">
+          {rows.map((row) => (
+            <article key={row.id} className="secao-block">
+              <div className="secao-block-head">
+                <h2>{row.titulo || 'Seção'}</h2>
+                {editable ? (
+                  <Btn variant="ghost" icon="x" onClick={() => remove(row.id)}>Excluir</Btn>
+                ) : null}
+              </div>
+              <p>{row.texto}</p>
+            </article>
+          ))}
+        </div>
+      ) : table !== 'visao_geral_secoes' ? <Empty text="Nenhuma seção cadastrada." /> : null}
       {editable ? (
         <form className="panel stack" onSubmit={add} style={{ marginTop: 16 }}>
           <h2>Nova seção</h2>
