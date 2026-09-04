@@ -55,9 +55,8 @@ AS $$
   SELECT public.eh_gestao_tecnica(auth.uid());
 $$;
 
-DROP FUNCTION IF EXISTS public.user_belongs_to_condominio(uuid);
-
-CREATE FUNCTION public.user_belongs_to_condominio(cid uuid)
+-- Não use DROP aqui: policies do Storage e das tabelas dependem desta função.
+CREATE OR REPLACE FUNCTION public.user_belongs_to_condominio(cid uuid)
 RETURNS boolean
 LANGUAGE sql
 STABLE

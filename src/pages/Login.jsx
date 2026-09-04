@@ -2,20 +2,58 @@ import { useEffect, useState } from 'react';
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useSession } from '../lib/session';
 import { supabaseConfigured } from '../lib/supabase';
-import { loadBranding, rememberBrandCondo, rememberedBrandCondo } from '../lib/branding';
-import { Alert, Btn, Field } from '../components/ui';
+import { loadBranding, rememberBrandCondo, isCondoUuid, resolverLoginCondominio, slugCondominio, ehHostPrincipal } from '../lib/branding';
+import { APP_LOGO, Alert, Btn, Field } from '../components/ui';
+import { Icon } from '../components/icons';
 
 export function LoginPage() {
-  const { session, signIn, selectCondo } = useSession();
+  const { session, signIn, signOut, selectCondo, isGestaoTecnica, memberships, loading } = useSession();
   const navigate = useNavigate();
   const { condoId: condoParam } = useParams();
   const [searchParams] = useSearchParams();
-  const targetCondoId = condoParam || searchParams.get('condo') || rememberedBrandCondo();
+  const condoRef = condoParam || searchParams.get('condo') || '';
+  const [targetCondoId, setTargetCondoId] = useState(() => (isCondoUuid(condoRef) ? condoRef : ''));
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [brand, setBrand] = useState({ nome: '', logo: '', login: '', capa: '' });
+
+  useEffect(() => {
+    sessionStorage.removeItem('cca.logoutTo');
+  }, []);
+
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      if (condoRef) {
+        const id = await resolverLoginCondominio(condoRef);
+        if (!live) return;
+        if (id) {
+          setTargetCondoId(id);
+          setError('');
+          return;
+        }
+        setTargetCondoId('');
+        setError('Não encontramos este condomínio.');
+        return;
+      }
+      const host = typeof window !== 'undefined' ? window.location.hostname : '';
+      if (host && !ehHostPrincipal(host)) {
+        const id = await resolverLoginCondominio(host);
+        if (!live) return;
+        if (id) {
+          setTargetCondoId(id);
+          return;
+        }
+      }
+      if (live) setTargetCondoId('');
+    })();
+    return () => {
+      live = false;
+    };
+  }, [condoRef]);
 
   useEffect(() => {
     if (!targetCondoId) return;
@@ -24,22 +62,33 @@ export function LoginPage() {
   }, [targetCondoId]);
 
   useEffect(() => {
-    const title = brand.nome ? `${brand.nome} · Entrar` : 'CCA Unificado · Entrar';
+    if (!isCondoUuid(condoParam) || !brand.nome) return;
+    const slug = slugCondominio(brand.nome);
+    if (slug) navigate(`/login/${slug}`, { replace: true });
+  }, [condoParam, brand.nome, navigate]);
+
+  useEffect(() => {
+    const title = brand.nome && targetCondoId ? `${brand.nome} · Entrar` : 'CCA Unificado · Entrar';
     document.title = title;
     return () => {
       document.title = 'CCA Unificado';
     };
-  }, [brand.nome]);
+  }, [brand.nome, targetCondoId]);
 
-  if (session && !targetCondoId) return <Navigate to="/" replace />;
+  const isCondoLogin = Boolean(condoRef || targetCondoId);
+  const pertenceAoCondo = isGestaoTecnica || memberships.some((item) => item.condominio_id === targetCondoId);
+
+  if (session && !loading && !isCondoLogin) {
+    return <Navigate to={isGestaoTecnica ? '/' : '/visao-geral'} replace />;
+  }
 
   async function onSubmit(e) {
     e.preventDefault();
     setBusy(true);
     setError('');
     try {
-      await signIn(email, password);
-      if (targetCondoId) selectCondo(targetCondoId);
+      await signIn(email, password, { condominioId: targetCondoId || '' });
+      navigate(targetCondoId ? '/visao-geral' : '/', { replace: true });
     } catch (err) {
       setError(err.message || 'Não foi possível entrar.');
     } finally {
@@ -48,49 +97,54 @@ export function LoginPage() {
   }
 
   function enterCondo() {
-    if (targetCondoId) selectCondo(targetCondoId);
-    navigate('/painel');
+    if (!pertenceAoCondo) {
+      setError('Sua conta não tem acesso a este condomínio.');
+      return;
+    }
+    selectCondo(targetCondoId);
+    navigate('/visao-geral');
   }
 
-  const nome = brand.nome || 'CCA Unificado';
-  const hero = brand.login || brand.capa;
-  const hasCondo = Boolean(brand.nome || brand.logo);
+  const nome = isCondoLogin ? brand.nome || 'Condomínio' : 'CCA Unificado';
+  const logoSrc = isCondoLogin ? brand.logo : APP_LOGO;
+  const kicker = isCondoLogin ? 'Portal do condomínio' : 'Gestão Técnica';
 
   return (
-    <div className={`auth-screen${hero ? ' has-hero' : ''}`}>
-      <aside
-        className="auth-hero"
-        style={hero ? { backgroundImage: `url(${hero})` } : undefined}
-      >
-        <div className="auth-hero-shade" />
-        <div className="auth-hero-brand">
-          <div className={`auth-logo-wrap${brand.logo ? '' : ' placeholder'}`}>
-            {brand.logo ? <img src={brand.logo} alt={nome} /> : <span className="mark" aria-hidden="true" />}
-          </div>
-          <p className="auth-kicker">{hasCondo ? 'Portal do condomínio' : 'Assistência técnica condominial'}</p>
-          <h1>{nome}</h1>
-          <p className="auth-hero-copy">Acesso seguro para moradores, administração e gestão técnica.</p>
-        </div>
-      </aside>
-
+    <div className={`auth-screen${isCondoLogin ? ' is-condo' : ' is-cca'}`}>
       <main className="auth-panel">
-        <div className="auth-card auth-card-login">
-          <div className="auth-card-logo">
-            {brand.logo ? <img src={brand.logo} alt="" /> : <span className="mark" aria-hidden="true" />}
+        <div className="auth-card-login">
+          <div className={`auth-card-logo${isCondoLogin ? '' : ' app-brand'}`}>
+            {logoSrc ? <img src={logoSrc} alt={nome} /> : <span className="mark" aria-hidden="true" />}
           </div>
-          <p className="auth-kicker">{hasCondo ? nome : 'CCA Unificado'}</p>
-          <h2>Entrar</h2>
-          <p className="muted">Use o e-mail e a senha da sua conta neste condomínio.</p>
+          <p className="auth-kicker">{kicker}</p>
+          <h1>{nome}</h1>
           {!supabaseConfigured ? (
             <Alert error="Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no arquivo .env" />
           ) : null}
           <Alert error={error} />
           {session ? (
             <div className="stack">
-              <p className="muted">Você já está autenticado. Esta é a tela de login de {nome}.</p>
-              <Btn icon="building" onClick={enterCondo}>
-                Entrar neste condomínio
-              </Btn>
+              {pertenceAoCondo ? (
+                <>
+                  <p className="muted">Você já está autenticado. Esta é a tela de login de {nome}.</p>
+                  <Btn icon="building" onClick={enterCondo}>
+                    Entrar neste condomínio
+                  </Btn>
+                </>
+              ) : (
+                <>
+                  <Alert error="Sua conta não tem acesso a este condomínio." />
+                  <Btn
+                    variant="ghost"
+                    icon="logout"
+                    onClick={async () => {
+                      await signOut({ to: window.location.pathname });
+                    }}
+                  >
+                    Sair e usar outra conta
+                  </Btn>
+                </>
+              )}
             </div>
           ) : (
             <form className="stack" onSubmit={onSubmit}>
@@ -98,9 +152,26 @@ export function LoginPage() {
                 <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" required />
               </Field>
               <Field label="Senha">
-                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
+                <div className="password-field">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    autoComplete="current-password"
+                    required
+                  />
+                  <button
+                    type="button"
+                    className="password-toggle"
+                    onClick={() => setShowPassword((v) => !v)}
+                    aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
+                    title={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
+                  >
+                    <Icon name={showPassword ? 'eyeOff' : 'eye'} size={18} />
+                  </button>
+                </div>
               </Field>
-              <Btn type="submit" icon="lock" disabled={busy || !supabaseConfigured}>
+              <Btn type="submit" icon="lock" disabled={busy || !supabaseConfigured || (Boolean(condoRef) && !targetCondoId)}>
                 {busy ? 'Entrando…' : 'Acessar'}
               </Btn>
             </form>

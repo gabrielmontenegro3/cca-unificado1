@@ -1,5 +1,13 @@
+import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Icon } from './icons';
+import ccaLogo from '../assets/logo cca collor (1).png';
+
+export const APP_LOGO = ccaLogo;
+
+export function AppLogo({ className = '', alt = 'CCA' }) {
+  return <img className={['app-logo', className].filter(Boolean).join(' ')} src={ccaLogo} alt={alt} />;
+}
 
 export function Alert({ error, ok }) {
   if (error) {
@@ -19,6 +27,27 @@ export function Alert({ error, ok }) {
     );
   }
   return null;
+}
+
+/** Toast flutuante (erro/sucesso). Não limpa formulários. */
+export function Toast({ message, type = 'error', onClose }) {
+  useEffect(() => {
+    if (!message) return undefined;
+    const timer = setTimeout(() => onClose?.(), 9000);
+    return () => clearTimeout(timer);
+  }, [message, onClose]);
+
+  if (!message) return null;
+
+  return (
+    <div className={`app-toast app-toast--${type}`} role="alert">
+      <Icon name={type === 'ok' ? 'check' : 'alert'} size={18} />
+      <span className="app-toast-text">{message}</span>
+      <button type="button" className="app-toast-close" aria-label="Fechar" onClick={onClose}>
+        <Icon name="x" size={16} />
+      </button>
+    </div>
+  );
 }
 
 export function Field({ label, children }) {

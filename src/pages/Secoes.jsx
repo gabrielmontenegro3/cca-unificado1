@@ -1,15 +1,22 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useSession } from '../lib/session';
-import { can } from '../lib/permissions';
-import { Alert, Btn, CoverImage, Empty, Field, Page } from '../components/ui';
+import { Alert, Btn, CoverHero, CoverImage, Empty, Field, Page } from '../components/ui';
+import { EditTelaButton, useEditTela } from '../components/EditTela';
 
-export function SecoesPage({ table, title, lead, extra, cover }) {
-  const { condoId, cargoTipo, branding } = useSession();
+export function SecoesPage({ table, title, lead, extra, cover, hero = false }) {
+  const { condoId, branding } = useSession();
   const [rows, setRows] = useState([]);
   const [form, setForm] = useState({ titulo: '', texto: '' });
   const [error, setError] = useState('');
-  const editable = can(cargoTipo, table === 'sobre_nos' ? 'manage_catalog' : 'manage_content');
+  const { editable, editing, showEditButton, toggleEditing } = useEditTela(
+    table === 'sobre_nos' ? 'manage_catalog' : 'manage_content',
+  );
+  const coverSrc = cover === 'capa'
+    ? (branding?.capa || branding?.visaoGeral)
+    : cover === 'visao'
+      ? (branding?.visaoGeral || branding?.capa)
+      : null;
 
   async function load() {
     const { data, error: err } = await supabase
@@ -45,18 +52,18 @@ export function SecoesPage({ table, title, lead, extra, cover }) {
     else load();
   }
 
-  return (
-    <Page title={title} lead={lead}>
+  const editAction = showEditButton ? (
+    <EditTelaButton editing={editing} onToggle={toggleEditing} />
+  ) : null;
+
+  const body = (
+    <>
       <Alert error={error} />
-      <CoverImage
-        src={cover === 'capa' ? (branding?.capa || branding?.visaoGeral) : cover === 'visao' ? (branding?.visaoGeral || branding?.capa) : null}
-        alt={title}
-      />
       {extra}
-      <div className="stack">
+      <div className="stack secoes-list">
         {rows.map((row) => (
-          <article key={row.id} className="panel">
-            <div className="row" style={{ justifyContent: 'space-between' }}>
+          <article key={row.id} className="secao-block">
+            <div className="secao-block-head">
               <h2>{row.titulo || 'Seção'}</h2>
               {editable ? (
                 <Btn variant="ghost" icon="x" onClick={() => remove(row.id)}>Excluir</Btn>
@@ -79,6 +86,30 @@ export function SecoesPage({ table, title, lead, extra, cover }) {
           <Btn type="submit" icon="plus">Adicionar</Btn>
         </form>
       ) : null}
+    </>
+  );
+
+  if (hero) {
+    return (
+      <section className="page page-dashboard">
+        <div className="cover-hero-wrap">
+          <CoverHero src={coverSrc} alt={title} />
+        </div>
+        <div className="page-head">
+          <div className="row page-head-row">
+            <h1>{title}</h1>
+            {editAction}
+          </div>
+        </div>
+        <div className="page-body">{body}</div>
+      </section>
+    );
+  }
+
+  return (
+    <Page title={title} lead={lead} actions={editAction}>
+      <CoverImage src={coverSrc} alt={title} />
+      {body}
     </Page>
   );
 }

@@ -1,16 +1,19 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useSession } from '../lib/session';
-import { PERIODICIDADE, can } from '../lib/permissions';
+import { PERIODICIDADE } from '../lib/permissions';
 import { addPeriod, formatDate, maintenanceTone } from '../lib/format';
-import { Alert, Badge, Btn, Empty, Field, Page } from '../components/ui';
+import { Alert, Badge, Btn, Field, Page } from '../components/ui';
+import { EditTelaButton, useEditTela } from '../components/EditTela';
+import { DataList, DetailFields, Modal } from '../components/DataList';
 
 export function ManutencaoPage() {
-  const { condoId, session, cargoTipo } = useSession();
+  const { condoId, session } = useSession();
   const [rows, setRows] = useState([]);
   const [form, setForm] = useState({ sistema: '', tipo: '', periodicidade: 'mensal', observacoes: '' });
   const [error, setError] = useState('');
-  const editable = can(cargoTipo, 'manage_catalog');
+  const [selected, setSelected] = useState(null);
+  const { editable, editing, showEditButton, canRole, toggleEditing } = useEditTela('manage_catalog');
 
   async function load() {
     const { data, error: err } = await supabase.from('manutencoes_preventivas').select('*, usuarios:responsavel_id(nome)').eq('condominio_id', condoId).order('proxima_execucao');
@@ -69,32 +72,28 @@ export function ManutencaoPage() {
       ultima_execucao: hoje,
       proxima_execucao: proxima,
     }).eq('id', row.id);
+    setSelected(null);
     load();
   }
 
   return (
-    <Page title="Manutenção preventiva" lead="O histórico fica em manutencao_execucoes; a listagem só destaca a próxima data.">
+    <Page
+      title="Manutenção preventiva"
+      lead="O histórico fica em manutencao_execucoes; a listagem só destaca a próxima data."
+      actions={showEditButton ? <EditTelaButton editing={editing} onToggle={toggleEditing} /> : null}
+    >
       <Alert error={error} />
-      <div className="table-wrap panel">
-        {!rows.length ? <Empty text="Nenhuma manutenção." /> : (
-          <table>
-            <thead><tr><th>Sistema</th><th>Periodicidade</th><th>Próxima</th><th>Status</th>{editable ? <th></th> : null}</tr></thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.id}>
-                  <td>{row.sistema}</td>
-                  <td>{PERIODICIDADE[row.periodicidade]?.label}</td>
-                  <td>{formatDate(row.proxima_execucao)}</td>
-                  <td><Badge value={maintenanceTone(row)} /></td>
-                  {editable ? (
-                    <td><Btn variant="ghost" icon="check" onClick={() => executar(row)}>Registrar execução</Btn></td>
-                  ) : null}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      <DataList
+        rows={rows}
+        empty="Nenhuma manutenção."
+        getTitle={(row) => row.sistema}
+        getSubtitle={(row) => [
+          PERIODICIDADE[row.periodicidade]?.label,
+          `Próxima ${formatDate(row.proxima_execucao)}`,
+          String(maintenanceTone(row) || '').replaceAll('_', ' '),
+        ].filter(Boolean).join(' · ')}
+        onSelect={setSelected}
+      />
       {editable ? (
         <form className="panel stack" onSubmit={add} style={{ marginTop: 16 }}>
           <h2>Nova manutenção</h2>
@@ -108,9 +107,31 @@ export function ManutencaoPage() {
           <Field label="Observações"><textarea value={form.observacoes} onChange={(e) => setForm({ ...form, observacoes: e.target.value })} /></Field>
           <Btn type="submit" icon="check">Salvar</Btn>
         </form>
-      ) : (
+      ) : !canRole ? (
         <p className="hint" style={{ marginTop: 16 }}>Somente leitura. A Gestão Técnica e o administrador cadastram as manutenções.</p>
-      )}
+      ) : null}
+
+      <Modal
+        open={Boolean(selected)}
+        title={selected?.sistema || 'Manutenção'}
+        onClose={() => setSelected(null)}
+        footer={editable && selected ? (
+          <Btn icon="check" onClick={() => executar(selected)}>Registrar execução</Btn>
+        ) : null}
+      >
+        <DetailFields
+          fields={[
+            { label: 'Sistema', value: selected?.sistema },
+            { label: 'Tipo', value: selected?.tipo || '—' },
+            { label: 'Periodicidade', value: PERIODICIDADE[selected?.periodicidade]?.label || selected?.periodicidade },
+            { label: 'Próxima execução', value: formatDate(selected?.proxima_execucao) },
+            { label: 'Última execução', value: formatDate(selected?.ultima_execucao) },
+            { label: 'Status', value: <Badge value={maintenanceTone(selected)} /> },
+            { label: 'Responsável', value: selected?.usuarios?.nome || '—' },
+            { label: 'Observações', value: selected?.observacoes || '—' },
+          ]}
+        />
+      </Modal>
     </Page>
   );
 }

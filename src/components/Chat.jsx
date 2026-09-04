@@ -59,7 +59,7 @@ export function ChatAnexos({ anexos }) {
   );
 }
 
-export function ChatMensagem({ mensagem, mine, quando }) {
+export function ChatMensagem({ mensagem, mine, quando, isNew = false }) {
   const anexos = mensagem.anexos || [];
   const texto = String(mensagem.texto || '').trim();
   const nome = nomeArquivoDaMensagem(texto);
@@ -68,9 +68,9 @@ export function ChatMensagem({ mensagem, mine, quando }) {
   const mostrarTexto = texto && !(ehArquivo && (anexos.length || temImagem));
   const autor = mensagem.usuarios?.nome || 'Equipe';
   return (
-    <div className={`msg-row ${mine ? 'mine' : ''}`}>
+    <div className={`msg-row ${mine ? 'mine' : ''}${isNew ? ' is-new' : ''}`}>
       {!mine ? <span className="msg-avatar">{iniciais(autor)}</span> : null}
-      <article className={`msg ${mine ? 'mine' : ''}`}>
+      <article className={`msg ${mine ? 'mine' : ''}${isNew ? ' is-new' : ''}`}>
         {!mine ? <small className="msg-name">{autor}</small> : null}
         {mostrarTexto ? <div className="msg-text">{mensagem.texto}</div> : null}
         <ChatAnexos anexos={anexos} />
@@ -80,10 +80,17 @@ export function ChatMensagem({ mensagem, mine, quando }) {
   );
 }
 
-export function ChatHeader({ title, subtitle, children }) {
+export function ChatHeader({ title, subtitle, children, onClick }) {
+  const clickable = typeof onClick === 'function';
   return (
-    <header className="chat-head">
-      <div className="chat-head-main">
+    <header className={`chat-head${clickable ? ' chat-head--clickable' : ''}`}>
+      <button
+        type="button"
+        className="chat-head-main"
+        onClick={clickable ? onClick : undefined}
+        disabled={!clickable}
+        title={clickable ? 'Ver dados do solicitante' : undefined}
+      >
         <span className="chat-head-icon" aria-hidden="true">
           <Icon name="message" />
         </span>
@@ -91,7 +98,7 @@ export function ChatHeader({ title, subtitle, children }) {
           <strong>{title}</strong>
           {subtitle ? <small>{subtitle}</small> : null}
         </div>
-      </div>
+      </button>
       {children ? <div className="chat-head-extra">{children}</div> : null}
     </header>
   );

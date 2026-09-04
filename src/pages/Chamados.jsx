@@ -4,18 +4,25 @@ import { supabase } from '../lib/supabase';
 import { useSession } from '../lib/session';
 import { can, STATUS_CHAMADO, STATUS_LABEL } from '../lib/permissions';
 import { chamadoNumero, formatChatTime, formatDateTime } from '../lib/format';
-import { criarChamado, minhaUnidade, enviarMensagemChamado, garantirChatChamado, anexarArquivosNasMensagens, enviarArquivoChamado } from '../lib/api';
+import { criarChamado, minhaUnidade, enviarMensagemChamado, garantirChatChamado, anexarArquivosNasMensagens, enviarArquivoChamado, resolverVisitaAgendadaChamado, avaliarChamado } from '../lib/api';
+import { classeListaConversa, mapaLeituraConversas, marcarConversaLidaPorChamado, mensagemEhNova } from '../lib/notifications';
 import { Alert, Badge, Btn, Empty, Field, Page } from '../components/ui';
 import { Icon } from '../components/icons';
 import { ChatComposer, ChatHeader, ChatMensagem } from '../components/Chat';
 import { StatusPicker } from '../components/StatusPicker';
+import { UnreadOrb } from '../components/UnreadOrb';
+import { AgendarVisitaModal, VisitaAgendadaBanner } from './AgendarVisita';
+import { SatisfacaoChamado, notaSatisfacao } from '../components/SatisfacaoEstrelas';
+import { ocorrenciaConcluida } from '../lib/ocorrenciasRelatorio';
 
 export function ChamadosPage() {
   const { condoId, cargoTipo, session } = useSession();
+  const navigate = useNavigate();
   const [rows, setRows] = useState([]);
   const [status, setStatus] = useState('');
   const [q, setQ] = useState('');
   const [error, setError] = useState('');
+  const [leitura, setLeitura] = useState({});
   const all = can(cargoTipo, 'view_all_tickets');
 
   useEffect(() => {
@@ -26,9 +33,15 @@ export function ChamadosPage() {
       .eq('condominio_id', condoId)
       .order('created_at', { ascending: false });
     if (!all) query = query.eq('solicitante_id', session.user.id);
-    query.then(({ data, error: err }) => {
+    query.then(async ({ data, error: err }) => {
       if (err) setError(err.message);
       setRows(data || []);
+      try {
+        const map = await mapaLeituraConversas();
+        setLeitura(map.byChamado || {});
+      } catch {
+        setLeitura({});
+      }
     });
   }, [condoId, all, session.user.id]);
 
@@ -55,24 +68,40 @@ export function ChamadosPage() {
         </select>
       </div>
       {!filtered.length ? (
-        <div className="panel"><Empty text="Nenhum chamado encontrado." /></div>
+        <Empty text="Nenhum chamado encontrado." />
       ) : (
         <div className="ticket-list">
-          {filtered.map((row) => (
-            <Link className="ticket-card" key={row.id} to={`/chamados/${row.id}`}>
-              <div className="ticket-card-top">
-                <strong>{chamadoNumero(row.numero_registro)}</strong>
-                <Badge value={row.status} />
-              </div>
-              <span className="ticket-card-title">{row.titulo}</span>
-              <small>
-                {row.unidades?.identificacao || 'Unidade'}
-                {all && row.usuarios?.nome ? ` · ${row.usuarios.nome}` : ''}
-                {' · '}
-                {formatDateTime(row.updated_at)}
-              </small>
-            </Link>
-          ))}
+          {filtered.map((row) => {
+            const estado = leitura[row.id]?.estado;
+            const unread = estado === 'nova' || estado === 'nao_lida';
+            return (
+              <Link
+                className={`ticket-card ${classeListaConversa(estado)}`.trim()}
+                key={row.id}
+                to={`/chamados/${row.id}`}
+              >
+                {unread ? (
+                  <UnreadOrb
+                    count={leitura[row.id]?.nao_lidas || 1}
+                    variant={estado === 'nova' ? 'nova' : 'alerta'}
+                    title={estado === 'nova' ? 'Conversa nova' : 'Mensagens novas'}
+                    onClick={() => navigate(`/chamados/${row.id}`)}
+                  />
+                ) : null}
+                <div className="ticket-card-top">
+                  <strong>{chamadoNumero(row.numero_registro)}</strong>
+                  <Badge value={row.status} />
+                </div>
+                <span className="ticket-card-title">{row.titulo}</span>
+                <small>
+                  {row.unidades?.identificacao || 'Unidade'}
+                  {all && row.usuarios?.nome ? ` · ${row.usuarios.nome}` : ''}
+                  {' · '}
+                  {formatDateTime(row.updated_at)}
+                </small>
+              </Link>
+            );
+          })}
         </div>
       )}
     </Page>
@@ -161,8 +190,15 @@ export function ChamadoDetalhePage() {
   const [error, setError] = useState('');
   const [sending, setSending] = useState(false);
   const chatLogRef = useRef(null);
+  const [lidaAte, setLidaAte] = useState(null);
+  const [visita, setVisita] = useState(null);
+  const [visitaModal, setVisitaModal] = useState(false);
+  const [satBusy, setSatBusy] = useState(false);
+  const [satError, setSatError] = useState('');
   const canStatus = can(cargoTipo, 'change_status');
   const canLaudo = can(cargoTipo, 'create_laudo');
+  const podeAgendar = can(cargoTipo, 'manage_traceability');
+  const ehMorador = String(cargoTipo || '').toLowerCase() === 'morador';
 
   async function load() {
     const { data, error: err } = await supabase
@@ -187,8 +223,21 @@ export function ChamadoDetalhePage() {
     }
     setConversa(convData);
     if (convData?.id) {
+      const part = await supabase
+        .from('conversa_participantes')
+        .select('ultima_leitura_em')
+        .eq('conversa_id', convData.id)
+        .eq('usuario_id', session.user.id)
+        .maybeSingle();
+      setLidaAte(part.data?.ultima_leitura_em || null);
       const msgs = await supabase.from('mensagens').select('*, usuarios(nome)').eq('conversa_id', convData.id).order('created_at');
-      setMensagens(await anexarArquivosNasMensagens(msgs.data || []));
+      const loaded = await anexarArquivosNasMensagens(msgs.data || []);
+      setMensagens(loaded);
+      await marcarConversaLidaPorChamado(id);
+      setVisita(await resolverVisitaAgendadaChamado(id, loaded));
+    } else {
+      setMensagens([]);
+      setVisita(await resolverVisitaAgendadaChamado(id, []));
     }
     const lau = await supabase.from('laudos_tecnicos').select('id, numero_registro').eq('chamado_id', id).maybeSingle();
     setLaudo(lau.data);
@@ -213,6 +262,15 @@ export function ChamadoDetalhePage() {
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [conversa?.id]);
+
+  useEffect(() => {
+    if (!id) return undefined;
+    const channel = supabase
+      .channel(`chamado-sat-${id}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'chamados', filter: `id=eq.${id}` }, () => load())
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [id]);
 
   async function send(e) {
     e.preventDefault();
@@ -267,9 +325,30 @@ export function ChamadoDetalhePage() {
     load();
   }
 
+  async function avaliar(estrelas) {
+    if (!id || satBusy) return;
+    setSatBusy(true);
+    setSatError('');
+    try {
+      await avaliarChamado(id, estrelas);
+      setChamado((prev) => prev ? {
+        ...prev,
+        satisfacao_estrelas: estrelas,
+        satisfacao_em: new Date().toISOString(),
+      } : prev);
+    } catch (err) {
+      setSatError(err.message || 'Não foi possível salvar a avaliação.');
+    } finally {
+      setSatBusy(false);
+    }
+  }
+
   if (!chamado) return <Page title="Chamado"><Alert error={error} /></Page>;
 
   const visiveis = mensagens.filter((m) => !m.excluido_em);
+  const podeAvaliar = ehMorador
+    && chamado.solicitante_id === session.user.id
+    && ocorrenciaConcluida(chamado);
 
   return (
     <div className="chamado-page">
@@ -290,6 +369,9 @@ export function ChamadoDetalhePage() {
             </div>
           </dl>
           {laudo && can(cargoTipo, 'view_laudos') ? <Link className="chamado-link" to={`/laudos/${laudo.id}`}>Laudo #{laudo.numero_registro}</Link> : null}
+          {can(cargoTipo, 'manage_traceability') ? (
+            <Btn to={`/rastreabilidade/${id}`} variant="ghost" icon="layers">Rastreabilidade</Btn>
+          ) : null}
           {canLaudo && !laudo ? (
             <Btn to={`/laudos/novo?chamado=${chamado.id}`} icon="clipboard">Criar laudo</Btn>
           ) : null}
@@ -312,16 +394,34 @@ export function ChamadoDetalhePage() {
         </aside>
 
         <section className="chat-shell">
-          <ChatHeader
-            title={chamado.titulo}
-            subtitle={`${chamadoNumero(chamado.numero_registro)}${chamado.unidades?.identificacao ? ` · ${chamado.unidades.identificacao}` : ''}`}
-          />
+          <div className="chat-top">
+            <ChatHeader
+              title={chamado.titulo}
+              subtitle={`${chamadoNumero(chamado.numero_registro)}${chamado.unidades?.identificacao ? ` · ${chamado.unidades.identificacao}` : ''}`}
+            >
+              {podeAgendar ? (
+                <Btn variant="ghost" icon="calendar" onClick={() => setVisitaModal(true)}>
+                  Agendar visita
+                </Btn>
+              ) : null}
+            </ChatHeader>
+            {ehMorador ? <VisitaAgendadaBanner visita={visita} /> : null}
+            {podeAvaliar ? (
+              <SatisfacaoChamado
+                nota={notaSatisfacao(chamado.satisfacao_estrelas)}
+                onRate={avaliar}
+                busy={satBusy}
+                error={satError}
+              />
+            ) : null}
+          </div>
           <div className="chat-log" ref={chatLogRef}>
             {visiveis.map((m) => (
               <ChatMensagem
                 key={m.id}
                 mensagem={m}
                 mine={m.usuario_id === session.user.id}
+                isNew={mensagemEhNova(m, session.user.id, lidaAte)}
                 quando={formatChatTime(m.created_at)}
               />
             ))}
@@ -336,6 +436,12 @@ export function ChamadoDetalhePage() {
           />
         </section>
       </div>
+      <AgendarVisitaModal
+        open={visitaModal}
+        onClose={() => setVisitaModal(false)}
+        chamadoId={id}
+        onScheduled={load}
+      />
     </div>
   );
 }

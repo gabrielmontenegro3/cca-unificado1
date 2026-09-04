@@ -1,8 +1,37 @@
+/** Mensagem legível a partir de erro do Supabase/Postgres. */
+export function formatDbError(error, contexto = '') {
+  if (!error) return 'Erro desconhecido.';
+  if (typeof error === 'string') return error;
+  const code = error.code || '';
+  const raw = String(error.message || error.error_description || 'Erro no banco de dados');
+  const prefix = contexto ? `${contexto}: ` : '';
+
+  if (code === '22001' || /value too long|character varying/i.test(raw)) {
+    return `${prefix}Algum valor ultrapassou o tamanho máximo permitido no banco.`;
+  }
+  if (code === '23505' || /duplicate key|unique constraint/i.test(raw)) {
+    return `${prefix}Já existe um registro com esses dados (duplicado).`;
+  }
+  if (code === '23503' || /foreign key/i.test(raw)) {
+    return `${prefix}Há uma referência inválida entre registros.`;
+  }
+  if (code === '42501' || /permission denied|row-level security/i.test(raw)) {
+    return `${prefix}Sem permissão para gravar este registro.`;
+  }
+  return `${prefix}${raw}`;
+}
+
 export function formatDate(value) {
   if (!value) return '—';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '—';
   return date.toLocaleDateString('pt-BR');
+}
+
+/** Mantém CNPJ só com dígitos (até 14). Aceita máscara na entrada. */
+export function normalizarCnpj(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  return digits ? digits.slice(0, 14) : null;
 }
 
 export function formatDateTime(value) {

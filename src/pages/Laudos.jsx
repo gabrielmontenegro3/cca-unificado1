@@ -11,13 +11,17 @@ import {
   enviarMensagemLaudo,
   enviarArquivoLaudo,
 } from '../lib/api';
+import { marcarConversaLidaPorLaudo, mensagemEhNova } from '../lib/notifications';
 import { Alert, Btn, Empty, Field, Page } from '../components/ui';
 import { ChatComposer, ChatHeader, ChatMensagem } from '../components/Chat';
+import { DataList, DetailFields, Modal } from '../components/DataList';
 
 export function LaudosPage() {
   const { condoId, cargoTipo } = useSession();
+  const navigate = useNavigate();
   const [rows, setRows] = useState([]);
   const [error, setError] = useState('');
+  const [selected, setSelected] = useState(null);
   const canCreate = can(cargoTipo, 'create_laudo');
   const canView = can(cargoTipo, 'view_laudos');
 
@@ -34,7 +38,7 @@ export function LaudosPage() {
       });
   }, [condoId, canView]);
 
-  if (!canView) return <Navigate to="/chamados" replace />;
+  if (!canView) return <Navigate to="/visao-geral" replace />;
 
   return (
     <Page
@@ -43,23 +47,43 @@ export function LaudosPage() {
       actions={canCreate ? <Btn to="/laudos/novo" icon="plus">Novo laudo</Btn> : null}
     >
       <Alert error={error} />
-      <div className="table-wrap panel">
-        {!rows.length ? <Empty text="Nenhum laudo." /> : (
-          <table>
-            <thead><tr><th>Nº</th><th>Título</th><th>Chamado</th><th>Data</th></tr></thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.id}>
-                  <td><Link to={`/laudos/${row.id}`}>{laudoNumero(row.numero_registro)}</Link></td>
-                  <td>{row.titulo}</td>
-                  <td>{row.chamados ? `${chamadoNumero(row.chamados.numero_registro)} · ${row.chamados.titulo || ''}` : '—'}</td>
-                  <td>{formatDate(row.data_laudo)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      <DataList
+        rows={rows}
+        empty="Nenhum laudo."
+        getTitle={(row) => row.titulo || laudoNumero(row.numero_registro)}
+        getSubtitle={(row) => [
+          laudoNumero(row.numero_registro),
+          row.chamados ? `${chamadoNumero(row.chamados.numero_registro)} · ${row.chamados.titulo || ''}` : null,
+          formatDate(row.data_laudo),
+        ].filter(Boolean).join(' · ')}
+        onSelect={setSelected}
+      />
+      <Modal
+        open={Boolean(selected)}
+        title={selected?.titulo || 'Laudo'}
+        onClose={() => setSelected(null)}
+        footer={selected ? (
+          <Btn icon="clipboard" onClick={() => navigate(`/laudos/${selected.id}`)}>
+            Ver chat do laudo
+          </Btn>
+        ) : null}
+      >
+        <DetailFields
+          fields={[
+            { label: 'Número', value: laudoNumero(selected?.numero_registro) },
+            { label: 'Título', value: selected?.titulo },
+            {
+              label: 'Chamado',
+              value: selected?.chamados
+                ? `${chamadoNumero(selected.chamados.numero_registro)} · ${selected.chamados.titulo || ''}`
+                : '—',
+            },
+            { label: 'Criado por', value: selected?.usuarios?.nome || '—' },
+            { label: 'Data', value: formatDate(selected?.data_laudo) },
+            { label: 'Descrição', value: selected?.descricao || '—' },
+          ]}
+        />
+      </Modal>
     </Page>
   );
 }
@@ -87,7 +111,7 @@ export function LaudoNovoPage() {
       });
   }, [condoId]);
 
-  if (!can(cargoTipo, 'view_laudos')) return <Navigate to="/chamados" replace />;
+  if (!can(cargoTipo, 'view_laudos')) return <Navigate to="/visao-geral" replace />;
   if (!can(cargoTipo, 'create_laudo')) {
     return <Page title="Novo laudo"><Alert error="Somente a Gestão Técnica pode abrir um laudo." /></Page>;
   }
@@ -153,6 +177,7 @@ export function LaudoDetalhePage() {
   const [error, setError] = useState('');
   const [sending, setSending] = useState(false);
   const chatLogRef = useRef(null);
+  const [lidaAte, setLidaAte] = useState(null);
   const canView = can(cargoTipo, 'view_laudos');
   const canChat = can(cargoTipo, 'chat_laudo');
 
@@ -178,14 +203,23 @@ export function LaudoDetalhePage() {
       }
       if (!convId) {
         setMensagens([]);
+        setLidaAte(null);
         return;
       }
+      const part = await supabase
+        .from('conversa_participantes')
+        .select('ultima_leitura_em')
+        .eq('conversa_id', convId)
+        .eq('usuario_id', session.user.id)
+        .maybeSingle();
+      setLidaAte(part.data?.ultima_leitura_em || null);
       const msgs = await supabase
         .from('mensagens')
         .select('*, usuarios(nome)')
         .eq('conversa_id', convId)
         .order('created_at');
       setMensagens(await anexarArquivosNasMensagens(msgs.data || []));
+      await marcarConversaLidaPorLaudo(id);
     } catch (chatErr) {
       const conv = await supabase.from('conversas').select('id').eq('laudo_id', id).maybeSingle();
       if (conv.data?.id) {
@@ -195,6 +229,7 @@ export function LaudoDetalhePage() {
           .eq('conversa_id', conv.data.id)
           .order('created_at');
         setMensagens(await anexarArquivosNasMensagens(msgs.data || []));
+        await marcarConversaLidaPorLaudo(id);
       } else {
         setError(chatErr.message || err.message || '');
       }
@@ -212,7 +247,7 @@ export function LaudoDetalhePage() {
     return () => clearTimeout(t);
   }, [mensagens]);
 
-  if (!canView) return <Navigate to="/chamados" replace />;
+  if (!canView) return <Navigate to="/visao-geral" replace />;
 
   async function send(e) {
     e.preventDefault();
@@ -300,6 +335,7 @@ export function LaudoDetalhePage() {
                 key={m.id}
                 mensagem={m}
                 mine={m.usuario_id === session.user.id}
+                isNew={mensagemEhNova(m, session.user.id, lidaAte)}
                 quando={formatChatTime(m.created_at)}
               />
             ))}

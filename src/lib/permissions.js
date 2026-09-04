@@ -82,6 +82,7 @@ export function can(tipo, action) {
     create_condo: t === 'gestao_tecnica',
     manage_users: t === 'administrador' || t === 'gestao_tecnica',
     change_status: isGestao(t),
+    manage_traceability: t === 'gestao_tecnica',
     create_laudo: t === 'gestao_tecnica',
     view_laudos: t !== 'morador',
     chat_laudo: t === 'gestao_tecnica' || t === 'construtora',
@@ -94,91 +95,55 @@ export function can(tipo, action) {
 }
 
 export function navFor(tipo) {
-  const t = String(tipo || '').toLowerCase().trim();
-  if (t === 'morador') {
-    return [
-      { to: '/chamados', label: 'Meus Chamados' },
-      { to: '/visao-geral', label: 'Visão Geral' },
-      { to: '/empreendimento', label: 'Sobre o Empreendimento' },
-      { to: '/documentos', label: 'Documentos' },
-      { to: '/boletins', label: 'Boletins' },
-      { to: '/contatos', label: 'Contatos' },
-      { to: '/sobre-nos', label: 'Sobre nós' },
-      { to: '/fornecedores', label: 'Fornecedores' },
-      { to: '/materiais', label: 'Materiais' },
-      { to: '/locais', label: 'Locais' },
-      { to: '/garantias', label: 'Garantias' },
-      { to: '/manutencao', label: 'Manutenção' },
-    ];
-  }
-  if (t === 'construtora') {
-    return [
-      { to: '/chamados', label: 'Chamados' },
-      { to: '/visao-geral', label: 'Visão Geral' },
-      { to: '/empreendimento', label: 'Empreendimento' },
-      { to: '/documentos', label: 'Documentos' },
-      { to: '/contatos', label: 'Contatos' },
-      { to: '/sobre-nos', label: 'Sobre nós' },
-      { to: '/fornecedores', label: 'Fornecedores' },
-      { to: '/materiais', label: 'Materiais' },
-      { to: '/locais', label: 'Locais' },
-      { to: '/garantias', label: 'Garantias' },
-      { to: '/manutencao', label: 'Manutenção' },
-      { to: '/laudos', label: 'Laudos' },
-    ];
-  }
-  if (t === 'gestao_tecnica') {
-    return [
-      { to: '/', label: 'Condomínios' },
-      { to: '/suporte', label: 'Suporte' },
-      { to: '/painel', label: 'Dashboard' },
-      { to: '/chamados', label: 'Chamados' },
-      { to: '/laudos', label: 'Laudos Técnicos' },
-      { to: '/manutencao', label: 'Manutenção' },
-      { to: '/fornecedores', label: 'Fornecedores' },
-      { to: '/materiais', label: 'Materiais' },
-      { to: '/locais', label: 'Locais' },
-      { to: '/garantias', label: 'Garantias' },
-      { to: '/documentos', label: 'Documentos' },
-      { to: '/boletins', label: 'Boletins' },
-      { to: '/visao-geral', label: 'Visão Geral' },
-      { to: '/empreendimento', label: 'Empreendimento' },
-      { to: '/usuarios', label: 'Usuários' },
-    ];
-  }
-  if (t === 'administracao') {
-    return [
-      { to: '/', label: 'Dashboard' },
-      { to: '/visao-geral', label: 'Visão Geral' },
-      { to: '/empreendimento', label: 'Empreendimento' },
-      { to: '/documentos', label: 'Documentos' },
-      { to: '/boletins', label: 'Boletins' },
-      { to: '/contatos', label: 'Contatos' },
-      { to: '/sobre-nos', label: 'Sobre nós' },
-      { to: '/fornecedores', label: 'Fornecedores' },
-      { to: '/materiais', label: 'Materiais' },
-      { to: '/locais', label: 'Locais' },
-      { to: '/garantias', label: 'Garantias' },
-      { to: '/manutencao', label: 'Manutenção' },
-      { to: '/chamados', label: 'Chamados' },
-      { to: '/laudos', label: 'Laudos' },
-    ];
-  }
-  return [
-    { to: '/', label: 'Dashboard' },
-    { to: '/visao-geral', label: 'Visão Geral' },
-    { to: '/empreendimento', label: 'Empreendimento' },
-    { to: '/documentos', label: 'Documentos' },
-    { to: '/boletins', label: 'Boletins' },
-    { to: '/contatos', label: 'Contatos' },
-    { to: '/sobre-nos', label: 'Sobre nós' },
-    { to: '/fornecedores', label: 'Fornecedores' },
-    { to: '/materiais', label: 'Materiais' },
-    { to: '/locais', label: 'Locais' },
-    { to: '/garantias', label: 'Garantias' },
-    { to: '/manutencao', label: 'Manutenção' },
-    { to: '/chamados', label: 'Chamados' },
-    { to: '/laudos', label: 'Laudos Técnicos' },
-    { to: '/usuarios', label: 'Usuários' },
+  return navGroupsFor(tipo).flatMap((group) => group.items);
+}
+
+export function navGroupsFor(tipo) {
+  const isGT = String(tipo || '').toLowerCase().trim() === 'gestao_tecnica';
+  const groups = [
+    {
+      id: 'empreendimento',
+      label: 'Empreendimento',
+      icon: 'building',
+      items: [
+        { to: '/visao-geral', label: 'Visão geral', icon: 'home' },
+        { to: '/empreendimento', label: 'Empreendimento', icon: 'building' },
+        { to: '/documentos', label: 'Documentos', icon: 'folder' },
+        { to: '/boletins', label: 'Boletins informativos', icon: 'newspaper' },
+      ],
+    },
+    {
+      id: 'manutencao',
+      label: 'Manutenção',
+      icon: 'wrench',
+      items: [
+        { to: '/manutencao', label: 'Manutenções', icon: 'wrench' },
+        ...(isGT ? [{ to: '/suporte', label: 'Suporte', icon: 'headset' }] : []),
+        ...(isGT ? [{ to: '/rastreabilidade', label: 'Rastreabilidade', icon: 'layers' }] : []),
+        ...(isGT ? [{ to: '/agendar-visita', label: 'Agendar visita', icon: 'calendar' }] : []),
+        ...(isGT ? [{ to: '/relatorio', label: 'Relatório', icon: 'file' }] : []),
+        ...(isGT ? [{ to: '/laudos', label: 'Laudos técnicos', icon: 'clipboard' }] : []),
+      ],
+    },
+    {
+      id: 'materiais',
+      label: 'Materiais',
+      icon: 'layers',
+      items: [
+        { to: '/fornecedores', label: 'Fornecedores', icon: 'box' },
+        { to: '/materiais', label: 'Materiais', icon: 'layers' },
+        { to: '/garantias', label: 'Garantias', icon: 'shield' },
+        { to: '/locais', label: 'Locais', icon: 'map' },
+      ],
+    },
+    {
+      id: 'sistema',
+      label: 'Sistema',
+      icon: 'layout',
+      items: [
+        ...(isGT ? [{ to: '/usuarios', label: 'Usuários', icon: 'users' }] : []),
+      ],
+    },
   ];
+  return groups.filter((group) => group.items.length > 0);
 }

@@ -2,11 +2,23 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSession } from '../lib/session';
 import { can } from '../lib/permissions';
-import { criarCondominio } from '../lib/api';
+import { criarCondominio, salvarDominioCondominio } from '../lib/api';
 import { GestaoBar } from '../components/GestaoBar';
-import { Alert, Btn, Empty, Field } from '../components/ui';
-import { PADROES, PADRAO_COMPLETO, copiarTexto } from '../lib/parseSeed';
-import { loginUrlDoCondominio } from '../lib/branding';
+import { Alert, AppLogo, Btn, Empty, Field, Toast } from '../components/ui';
+import {
+  PADROES,
+  PADRAO_COMPLETO,
+  EMPTY_UNIDADE_CONFIG,
+  copiarTexto,
+  gerarUnidadesDoConfig,
+  resumoCriacaoCondominio,
+  validarCriacaoCondominio,
+} from '../lib/parseSeed';
+import { loginUrlDoCondominio, dominioUrlDoCondominio } from '../lib/branding';
+import { Modal } from '../components/DataList';
+import { UnreadOrb } from '../components/UnreadOrb';
+import { condominiosComNaoLidas } from '../lib/notifications';
+import { UsuariosGestaoModal } from './Admin';
 
 const DRAFT_KEY = 'cca.condoFormDraft';
 
@@ -22,10 +34,6 @@ const EMPTY_FORM = {
   bairro: '',
   cidade: '',
   estado: '',
-  visao_geral: '',
-  sobre_empreendimento: '',
-  sobre_nos: '',
-  assistencia_tecnica: '',
   boletim_titulo: '',
   boletim_texto: '',
   catalogo_texto: '',
@@ -34,14 +42,17 @@ const EMPTY_FORM = {
   locais_texto: '',
   garantias_texto: '',
   unidades_texto: '',
+  unidade_config: { ...EMPTY_UNIDADE_CONFIG },
   contatos_texto: '',
   usuarios_texto: '',
 };
 
+const LETRAS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+
 function PadraoBar({ padrao, value, onUse, onCopied }) {
   async function copy() {
     await copiarTexto(padrao);
-    onCopied('Padrão copiado. Cole no campo, troque os [colchetes] pelos dados e salve.');
+    onCopied('Padrão copiado. Cole no campo e troque os [colchetes] pelos dados.');
   }
 
   function useHere() {
@@ -53,6 +64,165 @@ function PadraoBar({ padrao, value, onUse, onCopied }) {
     <div className="row padrao-bar">
       <Btn variant="ghost" icon="copy" onClick={copy}>Copiar padrão</Btn>
       <Btn variant="ghost" icon="file" onClick={useHere}>Usar padrão neste campo</Btn>
+    </div>
+  );
+}
+
+function UnidadesBuilder({ value, onChange }) {
+  const cfg = { ...EMPTY_UNIDADE_CONFIG, ...(value || {}) };
+  const geradas = gerarUnidadesDoConfig(cfg);
+  const preview = geradas.slice(0, 8);
+
+  function patch(partial) {
+    onChange({ ...cfg, ...partial });
+  }
+
+  return (
+    <div className="unidades-builder stack">
+      <Field label="Tipo de condomínio">
+        <select value={cfg.tipo} onChange={(e) => patch({ tipo: e.target.value })}>
+          <option value="predios">Prédios / torres (apartamentos)</option>
+          <option value="casas">Casas</option>
+        </select>
+      </Field>
+
+      {cfg.tipo === 'predios' ? (
+        <>
+          <Field label="Estrutura">
+            <select value={cfg.torres} onChange={(e) => patch({ torres: e.target.value })}>
+              <option value="1">Só um prédio / uma torre</option>
+              <option value="2">Duas torres / dois blocos</option>
+              <option value="varios">Várias torres / blocos</option>
+            </select>
+          </Field>
+
+          {cfg.torres === 'varios' ? (
+            <>
+              <Field label="Quantidade de torres / blocos">
+                <input
+                  type="number"
+                  min={3}
+                  max={26}
+                  value={cfg.qtdTorres}
+                  onChange={(e) => patch({ qtdTorres: e.target.value })}
+                />
+              </Field>
+              <div className="grid grid-2">
+                <Field label="Como se chamam">
+                  <select value={cfg.nomeacao} onChange={(e) => patch({ nomeacao: e.target.value })}>
+                    <option value="letra">Bloco A, B, C…</option>
+                    <option value="numero">Bloco 1, 2, 3…</option>
+                  </select>
+                </Field>
+                {cfg.nomeacao === 'letra' ? (
+                  <Field label="Até qual letra">
+                    <select value={cfg.ateLetra} onChange={(e) => patch({ ateLetra: e.target.value })}>
+                      {LETRAS.map((letra) => (
+                        <option key={letra} value={letra}>{letra}</option>
+                      ))}
+                    </select>
+                  </Field>
+                ) : (
+                  <Field label="Até qual número">
+                    <input
+                      type="number"
+                      min={1}
+                      max={99}
+                      value={cfg.ateNumero}
+                      onChange={(e) => patch({ ateNumero: e.target.value })}
+                    />
+                  </Field>
+                )}
+              </div>
+            </>
+          ) : null}
+
+          {cfg.torres === '2' ? (
+            <Field label="Como se chamam">
+              <select value={cfg.nomeacao} onChange={(e) => patch({ nomeacao: e.target.value })}>
+                <option value="letra">Bloco A e Bloco B</option>
+                <option value="numero">Bloco 1 e Bloco 2</option>
+              </select>
+            </Field>
+          ) : null}
+
+          <div className="grid grid-2">
+            <Field label="Andares por torre">
+              <input
+                type="number"
+                min={1}
+                max={80}
+                value={cfg.andares}
+                onChange={(e) => patch({ andares: e.target.value })}
+              />
+            </Field>
+            <Field label="Apartamentos por andar">
+              <input
+                type="number"
+                min={1}
+                max={40}
+                value={cfg.unidadesPorAndar}
+                onChange={(e) => patch({ unidadesPorAndar: e.target.value })}
+              />
+            </Field>
+          </div>
+        </>
+      ) : (
+        <>
+          <Field label="Quantidade de casas">
+            <input
+              type="number"
+              min={1}
+              max={500}
+              value={cfg.qtdCasas}
+              onChange={(e) => patch({ qtdCasas: e.target.value })}
+            />
+          </Field>
+          <div className="grid grid-2">
+            <Field label="Como se chamam">
+              <select value={cfg.nomeacao} onChange={(e) => patch({ nomeacao: e.target.value })}>
+                <option value="numero">Casa 1, 2, 3…</option>
+                <option value="letra">Casa A, B, C…</option>
+              </select>
+            </Field>
+            {cfg.nomeacao === 'letra' ? (
+              <Field label="Até qual letra">
+                <select value={cfg.ateLetra} onChange={(e) => patch({ ateLetra: e.target.value })}>
+                  {LETRAS.map((letra) => (
+                    <option key={letra} value={letra}>{letra}</option>
+                  ))}
+                </select>
+              </Field>
+            ) : (
+              <Field label="Até qual número">
+                <input
+                  type="number"
+                  min={1}
+                  max={500}
+                  value={cfg.ateNumero}
+                  onChange={(e) => patch({ ateNumero: e.target.value })}
+                />
+              </Field>
+            )}
+          </div>
+        </>
+      )}
+
+      <div className="unidades-preview">
+        <p className="hint" style={{ margin: 0 }}>
+          Serão criadas <strong>{geradas.length}</strong> unidade(s).
+        </p>
+        {preview.length ? (
+          <ul>
+            {preview.map((row) => (
+              <li key={row.identificacao}>{row.identificacao}</li>
+            ))}
+            {geradas.length > preview.length ? (
+              <li className="muted">… e mais {geradas.length - preview.length}</li>
+            ) : null}
+          </ul>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -79,7 +249,12 @@ export function CondominiosPortal() {
   });
   const [form, setForm] = useState(() => {
     try {
-      return { ...EMPTY_FORM, ...(JSON.parse(sessionStorage.getItem(DRAFT_KEY) || '{}').form || {}) };
+      const saved = JSON.parse(sessionStorage.getItem(DRAFT_KEY) || '{}').form || {};
+      return {
+        ...EMPTY_FORM,
+        ...saved,
+        unidade_config: { ...EMPTY_UNIDADE_CONFIG, ...(saved.unidade_config || {}) },
+      };
     } catch {
       return EMPTY_FORM;
     }
@@ -94,7 +269,28 @@ export function CondominiosPortal() {
   });
   const [error, setError] = useState('');
   const [ok, setOk] = useState('');
+  const [toast, setToast] = useState({ message: '', type: 'error' });
   const [busy, setBusy] = useState(false);
+  const [editingDominioId, setEditingDominioId] = useState('');
+  const [dominioDraft, setDominioDraft] = useState('');
+  const [savingDominio, setSavingDominio] = useState('');
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmResumo, setConfirmResumo] = useState(null);
+  const [unreadByCondo, setUnreadByCondo] = useState({});
+  const [usuariosModal, setUsuariosModal] = useState({ open: false, condoId: '', nome: '' });
+
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const map = await condominiosComNaoLidas();
+        if (live) setUnreadByCondo(map || {});
+      } catch {
+        if (live) setUnreadByCondo({});
+      }
+    })();
+    return () => { live = false; };
+  }, [memberships]);
 
   useEffect(() => {
     sessionStorage.setItem(DRAFT_KEY, JSON.stringify({ creating, form }));
@@ -116,15 +312,72 @@ export function CondominiosPortal() {
 
   async function openCondo(id) {
     selectCondo(id);
-    navigate('/painel');
+    navigate('/visao-geral');
+  }
+
+  function abrirEditorDominio(row) {
+    setEditingDominioId(row.condominio_id);
+    setDominioDraft(row.condominios?.dominio || '');
+  }
+
+  function fecharEditorDominio() {
+    setEditingDominioId('');
+    setDominioDraft('');
+  }
+
+  async function copiarLink(url, label) {
+    if (!url) return;
+    await copiarTexto(url);
+    setOk(`${label} copiado.`);
+    setError('');
+  }
+
+  async function salvarDominioDoCard(row) {
+    const dominio = String(dominioDraft || '').trim();
+    const okConfirm = window.confirm(
+      dominio
+        ? `Salvar o domínio "${dominio}" neste condomínio?`
+        : 'Remover o domínio personalizado deste condomínio?',
+    );
+    if (!okConfirm) return;
+
+    setSavingDominio(row.condominio_id);
+    setError('');
+    setOk('');
+    try {
+      const saved = await salvarDominioCondominio(row.condominio_id, dominioDraft);
+      await reloadMemberships();
+      fecharEditorDominio();
+      setOk(saved ? `Domínio salvo: ${saved}` : 'Domínio removido.');
+    } catch (err) {
+      setError(err.message || 'Não foi possível salvar o domínio.');
+    } finally {
+      setSavingDominio('');
+    }
   }
 
   async function onSubmit(e) {
     e.preventDefault();
+    setError('');
+    setOk('');
+    const issues = validarCriacaoCondominio({ ...form, ...files });
+    if (issues.length) {
+      setError(issues[0]);
+      return;
+    }
+    setConfirmResumo(resumoCriacaoCondominio({ ...form, ...files }));
+    setConfirmOpen(true);
+  }
+
+  async function confirmarCriacao() {
     setBusy(true);
     setError('');
     setOk('');
+    setToast({ message: '', type: 'error' });
     try {
+      const issues = validarCriacaoCondominio({ ...form, ...files });
+      if (issues.length) throw new Error(issues[0]);
+
       await criarCondominio({ ...form, ...files }, session.user.id);
       await reloadMemberships();
       setFiles({
@@ -136,9 +389,17 @@ export function CondominiosPortal() {
         documentos: [],
       });
       clearDraft();
+      setConfirmOpen(false);
+      setConfirmResumo(null);
+      setCreating(false);
       setOk('Condomínio criado.');
+      setToast({ message: 'Condomínio criado com sucesso.', type: 'ok' });
     } catch (err) {
-      setError(err.message || 'Não foi possível criar o condomínio.');
+      // Mantém o formulário e os arquivos; só fecha o confirm e avisa
+      setConfirmOpen(false);
+      const msg = err.message || 'Não foi possível criar o condomínio.';
+      setError(msg);
+      setToast({ message: msg, type: 'error' });
     } finally {
       setBusy(false);
     }
@@ -155,22 +416,31 @@ export function CondominiosPortal() {
   return (
     <div className="portal">
       <GestaoBar />
+      <Toast
+        message={toast.message}
+        type={toast.type}
+        onClose={() => setToast({ message: '', type: 'error' })}
+      />
 
       <main className="portal-main">
-        <div className="page-head">
-          <div className="row" style={{ justifyContent: 'space-between' }}>
-            <div>
-              <h1>Condomínios</h1>
-              <p>Selecione um empreendimento, copie o link da tela de login ou cadastre um novo.</p>
-            </div>
+        <div className="portal-hero">
+          <AppLogo className="portal-hero-logo" alt="CCA" />
+          <div className="portal-toolbar">
             {!creating ? (
-              <Btn icon="plus" onClick={() => setCreating(true)}>
-                Criar novo condomínio
-              </Btn>
+              <Btn
+                icon="plus"
+                className="btn-round"
+                aria-label="Criar novo condomínio"
+                onClick={() => setCreating(true)}
+              />
             ) : (
-              <Btn variant="ghost" icon="x" onClick={() => setCreating(false)}>
-                Cancelar
-              </Btn>
+              <Btn
+                variant="ghost"
+                icon="x"
+                className="btn-round"
+                aria-label="Cancelar"
+                onClick={() => setCreating(false)}
+              />
             )}
           </div>
         </div>
@@ -199,7 +469,7 @@ export function CondominiosPortal() {
             <Section title="Imagens de marca" hint="Arquivos opcionais. Ficam no Storage do condomínio.">
               <div className="grid grid-2">
                 <Field label="Logo">
-                  <input type="file" accept="image/*" onChange={(e) => setFile('logo', e.target.files?.[0] || null)} />
+                  <input type="file" accept="image/png,image/webp,image/*" onChange={(e) => setFile('logo', e.target.files?.[0] || null)} />
                 </Field>
                 <Field label="Imagem visão geral">
                   <input type="file" accept="image/*" onChange={(e) => setFile('imagem_visao_geral', e.target.files?.[0] || null)} />
@@ -246,21 +516,6 @@ export function CondominiosPortal() {
               </div>
             </Section>
 
-            <Section title="Conteúdo institucional" hint="Textos livres. Cada bloco vira uma seção nas telas do condomínio.">
-              <Field label="Visão geral">
-                <textarea value={form.visao_geral} onChange={(e) => setField('visao_geral', e.target.value)} />
-              </Field>
-              <Field label="Sobre o empreendimento">
-                <textarea value={form.sobre_empreendimento} onChange={(e) => setField('sobre_empreendimento', e.target.value)} />
-              </Field>
-              <Field label="Sobre nós">
-                <textarea value={form.sobre_nos} onChange={(e) => setField('sobre_nos', e.target.value)} />
-              </Field>
-              <Field label="Assistência técnica">
-                <textarea value={form.assistencia_tecnica} onChange={(e) => setField('assistencia_tecnica', e.target.value)} />
-              </Field>
-            </Section>
-
             <Section title="Boletim informativo">
               <Field label="Título">
                 <input value={form.boletim_titulo} onChange={(e) => setField('boletim_titulo', e.target.value)} />
@@ -271,8 +526,8 @@ export function CondominiosPortal() {
             </Section>
 
             <Section
-              title="Fornecedores | Material | Local | Garantia"
-              hint="Copie o padrão do sistema, preencha no lugar dos [colchetes] e cole de volta. A primeira linha (cabeçalho) é lida e ignorada."
+              title="Fornecedores · Materiais · Locais · Garantias"
+              hint="Copie o padrão, troque os [colchetes] pelos dados reais e cole de volta no campo. Uma linha = um registro."
             >
               <div className="row">
                 <Btn
@@ -287,7 +542,11 @@ export function CondominiosPortal() {
                   Copiar todos os padrões
                 </Btn>
               </div>
-              <Field label="Base técnica (texto)">
+              <Field label="Base técnica (vínculos)">
+                <p className="hint" style={{ marginTop: 0 }}>
+                  Cada linha conecta Fornecedor · Material · Local · Garantia.
+                  Ex.: <code>Acme | Porcelanato | Hall | Garantia fábrica</code>
+                </p>
                 <PadraoBar
                   padrao={PADROES.catalogo}
                   value={form.catalogo_texto}
@@ -302,6 +561,9 @@ export function CondominiosPortal() {
                 />
               </Field>
               <Field label="Fornecedores">
+                <p className="hint" style={{ marginTop: 0 }}>
+                  Nome · CNPJ · vendedor · tel. vendedor · telefone 1 · telefone 2 · localização
+                </p>
                 <PadraoBar
                   padrao={PADROES.fornecedores}
                   value={form.fornecedores_texto}
@@ -311,6 +573,9 @@ export function CondominiosPortal() {
                 <textarea className="tall" placeholder={PADROES.fornecedores} value={form.fornecedores_texto} onChange={(e) => setField('fornecedores_texto', e.target.value)} />
               </Field>
               <Field label="Materiais">
+                <p className="hint" style={{ marginTop: 0 }}>
+                  Um material por linha (nome). Vínculos com fornecedor/local/garantia vêm da base técnica.
+                </p>
                 <PadraoBar
                   padrao={PADROES.materiais}
                   value={form.materiais_texto}
@@ -320,6 +585,9 @@ export function CondominiosPortal() {
                 <textarea className="tall" placeholder={PADROES.materiais} value={form.materiais_texto} onChange={(e) => setField('materiais_texto', e.target.value)} />
               </Field>
               <Field label="Locais">
+                <p className="hint" style={{ marginTop: 0 }}>
+                  Nome · descrição
+                </p>
                 <PadraoBar
                   padrao={PADROES.locais}
                   value={form.locais_texto}
@@ -329,6 +597,9 @@ export function CondominiosPortal() {
                 <textarea className="tall" placeholder={PADROES.locais} value={form.locais_texto} onChange={(e) => setField('locais_texto', e.target.value)} />
               </Field>
               <Field label="Garantias">
+                <p className="hint" style={{ marginTop: 0 }}>
+                  Nome · tempo · unidade (dias/meses/anos) · data final · perda da garantia · descrição · telefone
+                </p>
                 <PadraoBar
                   padrao={PADROES.garantias}
                   value={form.garantias_texto}
@@ -339,34 +610,14 @@ export function CondominiosPortal() {
               </Field>
             </Section>
 
-            <Section title="Unidades, contatos e usuários" hint="Mesmo padrão: copie, preencha e mantenha o cabeçalho. Cargo: administrador, construtora, administracao ou morador. Só vincula quem já tem login no Auth.">
-              <Field label="Unidades">
-                <PadraoBar
-                  padrao={PADROES.unidades}
-                  value={form.unidades_texto}
-                  onUse={(next) => setField('unidades_texto', next)}
-                  onCopied={(msg) => { setOk(msg); setError(''); }}
-                />
-                <textarea className="tall" placeholder={PADROES.unidades} value={form.unidades_texto} onChange={(e) => setField('unidades_texto', e.target.value)} />
-              </Field>
-              <Field label="Contatos">
-                <PadraoBar
-                  padrao={PADROES.contatos}
-                  value={form.contatos_texto}
-                  onUse={(next) => setField('contatos_texto', next)}
-                  onCopied={(msg) => { setOk(msg); setError(''); }}
-                />
-                <textarea className="tall" placeholder={PADROES.contatos} value={form.contatos_texto} onChange={(e) => setField('contatos_texto', e.target.value)} />
-              </Field>
-              <Field label="Usuários">
-                <PadraoBar
-                  padrao={PADROES.usuarios}
-                  value={form.usuarios_texto}
-                  onUse={(next) => setField('usuarios_texto', next)}
-                  onCopied={(msg) => { setOk(msg); setError(''); }}
-                />
-                <textarea className="tall" placeholder={PADROES.usuarios} value={form.usuarios_texto} onChange={(e) => setField('usuarios_texto', e.target.value)} />
-              </Field>
+            <Section
+              title="Unidades do empreendimento"
+              hint="Escolha se são casas ou prédios, quantas torres/blocos e como se chamam. As unidades são geradas automaticamente."
+            >
+              <UnidadesBuilder
+                value={form.unidade_config}
+                onChange={(next) => setField('unidade_config', next)}
+              />
             </Section>
 
             <Section title="Documentos e imagens ilustrativas">
@@ -378,18 +629,61 @@ export function CondominiosPortal() {
               </Field>
             </Section>
 
-            <Section title="Chamados, laudos e chat">
-              <p className="hint">
-                Chamado, número do registro, status, mensagens, imagens/documentos, laudo técnico e o chat
-                são gerados automaticamente quando alguém abre um registro no condomínio. Não se preenche na criação.
-              </p>
-            </Section>
-
             <Btn type="submit" icon="check" disabled={busy}>
-              {busy ? 'Criando…' : 'Salvar condomínio'}
+              {busy ? 'Criando…' : 'Criar condomínio'}
             </Btn>
           </form>
         ) : null}
+
+        <Modal
+          open={confirmOpen}
+          title="Confirmar criação"
+          onClose={() => {
+            if (!busy) {
+              setConfirmOpen(false);
+              setConfirmResumo(null);
+            }
+          }}
+          footer={(
+            <>
+              <Btn
+                variant="ghost"
+                disabled={busy}
+                onClick={() => {
+                  setConfirmOpen(false);
+                  setConfirmResumo(null);
+                }}
+              >
+                Revisar
+              </Btn>
+              <Btn icon="check" disabled={busy} onClick={confirmarCriacao}>
+                {busy ? 'Criando…' : 'Confirmar e criar'}
+              </Btn>
+            </>
+          )}
+        >
+          <p className="hint" style={{ marginTop: 0 }}>
+            Confira se está tudo certo. Só vamos enviar ao banco depois que você confirmar.
+          </p>
+          {confirmResumo ? (
+            <ul className="confirm-resumo">
+              <li><strong>Nome:</strong> {confirmResumo.nome}</li>
+              {confirmResumo.cidade ? <li><strong>Cidade:</strong> {confirmResumo.cidade}</li> : null}
+              <li><strong>Fornecedores:</strong> {confirmResumo.fornecedores}</li>
+              <li><strong>Materiais:</strong> {confirmResumo.materiais}</li>
+              <li><strong>Locais:</strong> {confirmResumo.locais}</li>
+              <li><strong>Garantias:</strong> {confirmResumo.garantias}</li>
+              <li><strong>Unidades:</strong> {confirmResumo.unidades}</li>
+              <li><strong>Contatos:</strong> {confirmResumo.contatos}</li>
+              <li><strong>Usuários a vincular:</strong> {confirmResumo.usuarios}</li>
+              <li><strong>Linhas base técnica:</strong> {confirmResumo.linhasBase}</li>
+              <li>
+                <strong>Arquivos:</strong>{' '}
+                {confirmResumo.arquivos.length ? confirmResumo.arquivos.join(', ') : 'nenhum'}
+              </li>
+            </ul>
+          ) : null}
+        </Modal>
 
         {!memberships.length && !creating ? (
           <div className="panel">
@@ -398,25 +692,103 @@ export function CondominiosPortal() {
         ) : (
           <div className="condo-grid">
             {memberships.map((row) => {
-              const loginUrl = loginUrlDoCondominio(row.condominio_id);
+              const nome = row.condominios?.nome || 'Condomínio';
+              const loginUrl = loginUrlDoCondominio(row.condominio_id, nome);
+              const dominioSalvo = row.condominios?.dominio || '';
+              const dominioUrl = dominioUrlDoCondominio(dominioSalvo);
+              const editing = editingDominioId === row.condominio_id;
+              const saving = savingDominio === row.condominio_id;
+              const unread = unreadByCondo[row.condominio_id] || 0;
               return (
-                <article key={row.id} className="condo-card">
-                  <strong>{row.condominios?.nome || 'Condomínio'}</strong>
-                  <small>{row.condominios?.ativo === false ? 'Inativo' : 'Tela de login deste condomínio'}</small>
-                  <p className="condo-login-url">{loginUrl}</p>
-                  <div className="row">
+                <article key={row.id} className={`condo-card${unread ? ' has-unread' : ''}`}>
+                  {unread ? (
+                    <UnreadOrb
+                      count={unread}
+                      variant="alerta"
+                      title={`${unread} conversa(s) não visualizada(s) — abrir no Suporte`}
+                      onClick={() => {
+                        selectCondo(row.condominio_id);
+                        navigate(`/suporte?condo=${row.condominio_id}&naoLidas=1`);
+                      }}
+                    />
+                  ) : null}
+                  <header className="condo-card-head">
+                    <strong>{nome}</strong>
+                    {row.condominios?.ativo === false ? <span className="condo-status">Inativo</span> : null}
+                  </header>
+
+                  <div className="condo-links">
+                    <div className="condo-link">
+                      <span className="condo-link-label">Login</span>
+                      <p>{loginUrl}</p>
+                      <Btn
+                        variant="ghost"
+                        icon="copy"
+                        className="condo-copy"
+                        aria-label="Copiar login"
+                        onClick={() => copiarLink(loginUrl, 'Link de login')}
+                      />
+                    </div>
+                    {dominioUrl ? (
+                      <div className="condo-link">
+                        <span className="condo-link-label">Domínio</span>
+                        <p>{dominioUrl}</p>
+                        <Btn
+                          variant="ghost"
+                          icon="copy"
+                          className="condo-copy"
+                          aria-label="Copiar domínio"
+                          onClick={() => copiarLink(dominioUrl, 'Domínio')}
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {editing ? (
+                    <div className="condo-domain-edit">
+                      <Field label="Domínio personalizado">
+                        <input
+                          value={dominioDraft}
+                          onChange={(e) => setDominioDraft(e.target.value)}
+                          placeholder="residencial-aurora.com.br"
+                          autoFocus
+                        />
+                      </Field>
+                      <div className="row">
+                        <Btn icon="check" disabled={saving} onClick={() => salvarDominioDoCard(row)}>
+                          {saving ? 'Salvando…' : 'Salvar'}
+                        </Btn>
+                        <Btn variant="ghost" icon="x" disabled={saving} onClick={fecharEditorDominio}>
+                          Cancelar
+                        </Btn>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="condo-card-actions">
+                    {editing ? null : (
+                      <Btn
+                        variant="ghost"
+                        icon={dominioSalvo ? 'pencil' : 'plus'}
+                        onClick={() => abrirEditorDominio(row)}
+                      >
+                        Domínio
+                      </Btn>
+                    )}
                     <Btn
                       variant="ghost"
-                      icon="copy"
-                      onClick={async () => {
-                        await copiarTexto(loginUrl);
-                        setOk(`Link de login copiado: ${row.condominios?.nome || 'condomínio'}`);
-                        setError('');
+                      icon="plus"
+                      onClick={() => {
+                        setUsuariosModal({
+                          open: true,
+                          condoId: row.condominio_id,
+                          nome: nome,
+                        });
                       }}
                     >
-                      Copiar login
+                      Usuários
                     </Btn>
-                    <Btn icon="building" onClick={() => openCondo(row.condominio_id)}>
+                    <Btn onClick={() => openCondo(row.condominio_id)}>
                       Abrir
                     </Btn>
                   </div>
@@ -426,6 +798,13 @@ export function CondominiosPortal() {
           </div>
         )}
       </main>
+
+      <UsuariosGestaoModal
+        open={usuariosModal.open}
+        condoId={usuariosModal.condoId}
+        condoNome={usuariosModal.nome}
+        onClose={() => setUsuariosModal({ open: false, condoId: '', nome: '' })}
+      />
     </div>
   );
 }

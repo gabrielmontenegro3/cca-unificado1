@@ -1,7 +1,18 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { supabase, supabaseConfigured } from './supabase';
-import { loadBranding, rememberBrandCondo } from './branding';
+import { loadBranding, rememberBrandCondo, forgetBrandCondo } from './branding';
 import { CARGO_LABEL } from './permissions';
+import {
+  aplicarPrefs,
+  bootstrapPrefs,
+  DEFAULT_PREFS,
+  lerPrefsLocais,
+  precisaDefinirPreferencias,
+  prefsDoPerfil,
+  salvarPreferencias,
+} from './prefs';
+
+bootstrapPrefs();
 
 const SessionContext = createContext(null);
 const STORAGE_KEY = 'cca.condominio';
@@ -95,19 +106,58 @@ async function inferMoradorByUnidade(userId, rows) {
   });
 }
 
+async function avaliarAcessoLogin(user, condominioId) {
+  const { data: userRow } = await supabase.from('usuarios').select('*').eq('id', user.id).maybeSingle();
+  const { links } = await loadMemberships(user.id, false);
+  const rpc = await supabase.rpc('user_is_gestao_tecnica');
+  const gestao = detectGestaoTecnica(userRow, user, links) || rpc.data === true;
+
+  if (!condominioId) {
+    if (!gestao) {
+      return {
+        ok: false,
+        message: 'Este acesso é exclusivo da Gestão Técnica. Entre pelo link de login do seu condomínio.',
+      };
+    }
+    return { ok: true };
+  }
+
+  if (gestao) return { ok: true };
+
+  const belongs = (links || []).some((row) => row.condominio_id === condominioId);
+  if (!belongs) {
+    return { ok: false, message: 'Sua conta não tem acesso a este condomínio.' };
+  }
+  return { ok: true };
+}
+
 async function loadMemberships(userId, isGestaoTecnica) {
   if (isGestaoTecnica) {
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from('condominios')
-      .select('id, nome, logo_path, ativo')
+      .select('id, nome, logo_path, ativo, dominio')
       .order('nome');
+    if (error) {
+      const plain = await supabase.from('condominios').select('id, nome, logo_path, ativo').order('nome');
+      data = plain.data;
+      error = /dominio/i.test(error.message) ? plain.error : error;
+    }
     return { links: asGestaoMemberships(data), error };
   }
   let { data, error } = await supabase
     .from('usuario_condominio')
-    .select('id, ativo, condominio_id, cargo_id, cargos(id, nome, tipo), condominios(id, nome, logo_path, ativo)')
+    .select('id, ativo, condominio_id, cargo_id, cargos(id, nome, tipo), condominios(id, nome, logo_path, ativo, dominio)')
     .eq('usuario_id', userId)
     .eq('ativo', true);
+  if (error) {
+    const withoutDomain = await supabase
+      .from('usuario_condominio')
+      .select('id, ativo, condominio_id, cargo_id, cargos(id, nome, tipo), condominios(id, nome, logo_path, ativo)')
+      .eq('usuario_id', userId)
+      .eq('ativo', true);
+    data = withoutDomain.data;
+    error = withoutDomain.error;
+  }
   if (error) {
     const plain = await supabase
       .from('usuario_condominio')
@@ -176,6 +226,9 @@ export function SessionProvider({ children }) {
       setProfile(userRow);
       setIsGestaoTecnica(gestao);
       setMemberships(loaded.links || []);
+      const fromProfile = prefsDoPerfil(userRow);
+      if (fromProfile) aplicarPrefs(fromProfile);
+      else if (!precisaDefinirPreferencias(userRow)) aplicarPrefs(lerPrefsLocais() || DEFAULT_PREFS);
       setLoading(false);
       ready.current = true;
     }
@@ -247,10 +300,27 @@ export function SessionProvider({ children }) {
       branding,
       loading,
       error,
+      needsPreferencias: precisaDefinirPreferencias(profile),
       selectCondo(id) {
+        if (!id) return;
+        if (!isGestaoTecnica && !memberships.some((item) => item.condominio_id === id)) return;
         setCondoId(id);
         sessionStorage.setItem(STORAGE_KEY, id);
         rememberBrandCondo(id);
+      },
+      async savePreferencias(prefs) {
+        if (!session?.user?.id) throw new Error('Sessão inválida.');
+        const row = await salvarPreferencias(session.user.id, prefs);
+        if (row) setProfile(row);
+        else {
+          setProfile((prev) => ({
+            ...(prev || {}),
+            tema: prefs.tema,
+            tamanho_fonte: prefs.tamanho_fonte,
+            preferencias_ok: true,
+          }));
+        }
+        return row;
       },
       async reloadMemberships() {
         if (!session?.user) return [];
@@ -262,11 +332,28 @@ export function SessionProvider({ children }) {
         setMemberships(links || []);
         return links || [];
       },
-      async signIn(email, password) {
-        const { error: err } = await supabase.auth.signInWithPassword({ email, password });
+      async signIn(email, password, { condominioId } = {}) {
+        const { data, error: err } = await supabase.auth.signInWithPassword({ email, password });
         if (err) throw err;
+        const acesso = await avaliarAcessoLogin(data.user, condominioId || '');
+        if (!acesso.ok) {
+          await supabase.auth.signOut();
+          sessionStorage.removeItem(STORAGE_KEY);
+          throw new Error(acesso.message);
+        }
+        if (condominioId) {
+          setCondoId(condominioId);
+          sessionStorage.setItem(STORAGE_KEY, condominioId);
+          rememberBrandCondo(condominioId);
+        } else {
+          setCondoId('');
+          sessionStorage.removeItem(STORAGE_KEY);
+        }
       },
-      async signOut() {
+      async signOut({ to } = {}) {
+        const destino = to || '/login';
+        sessionStorage.setItem('cca.logoutTo', destino);
+        if (destino === '/login') forgetBrandCondo();
         await supabase.auth.signOut();
         sessionStorage.removeItem(STORAGE_KEY);
       },
