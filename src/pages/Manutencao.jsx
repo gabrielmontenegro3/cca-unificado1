@@ -87,11 +87,18 @@ export function ManutencaoPage() {
         rows={rows}
         empty="Nenhuma manutenção."
         getTitle={(row) => row.sistema}
-        getSubtitle={(row) => [
-          PERIODICIDADE[row.periodicidade]?.label,
-          `Próxima ${formatDate(row.proxima_execucao)}`,
-          String(maintenanceTone(row) || '').replaceAll('_', ' '),
-        ].filter(Boolean).join(' · ')}
+        getSubtitle={(row) => [row.tipo, row.usuarios?.nome].filter(Boolean).join(' · ')}
+        getTags={(row) => [
+          PERIODICIDADE[row.periodicidade]?.label
+            ? { key: 'per', icon: 'layers', label: PERIODICIDADE[row.periodicidade].label }
+            : null,
+          row.proxima_execucao
+            ? { key: 'next', icon: 'calendar', label: `Próxima ${formatDate(row.proxima_execucao)}` }
+            : null,
+          maintenanceTone(row)
+            ? { key: 'tone', icon: 'wrench', label: String(maintenanceTone(row) || '').replaceAll('_', ' ') }
+            : null,
+        ]}
         onSelect={setSelected}
       />
       {editable ? (

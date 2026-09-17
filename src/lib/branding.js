@@ -108,26 +108,62 @@ export function loginUrlDoCondominio(condoId, nome) {
   return path ? appUrl(path) : '';
 }
 
+export function loginPathDaConstrutora(nome, fallbackId = '') {
+  return loginPathDoCondominio(nome, fallbackId);
+}
+
+export function loginUrlDaConstrutora(id, nome) {
+  return loginUrlDoCondominio(id, nome);
+}
+
+export function nomeExibicaoConstrutora(row) {
+  return String(row?.nome_fantasia || row?.nome || row?.razao_social || '').trim();
+}
+
 export function dominioUrlDoCondominio(dominio) {
   const host = normalizarDominio(dominio);
   return host ? `https://${host}` : '';
 }
 
 export async function resolverLoginCondominio(ref) {
-  const value = decodeURIComponent(String(ref || '').trim());
-  if (!value || !supabase) return '';
-  if (isCondoUuid(value)) return value;
+  const portal = await resolverLoginPortal(ref);
+  if (portal?.tipo === 'condominio') return portal.id;
+  if (isCondoUuid(ref) && !portal) return String(ref || '').trim();
+  return '';
+}
 
-  const rpc = await supabase.rpc('resolver_login_condominio', { p_ref: value });
-  if (!rpc.error && rpc.data) return rpc.data;
+export async function resolverLoginPortal(ref) {
+  const value = decodeURIComponent(String(ref || '').trim());
+  if (!value || !supabase) return null;
+
+  const rpc = await supabase.rpc('resolver_login_portal', { p_ref: value });
+  if (!rpc.error && rpc.data) {
+    const row = typeof rpc.data === 'string' ? JSON.parse(rpc.data) : rpc.data;
+    if (row?.id && row?.tipo) return { tipo: row.tipo, id: row.id };
+  }
+
+  if (isCondoUuid(value)) {
+    const construtora = await supabase.from('construtoras').select('id').eq('id', value).maybeSingle();
+    if (construtora.data?.id) return { tipo: 'construtora', id: construtora.data.id };
+    return { tipo: 'condominio', id: value };
+  }
 
   const slug = slugCondominio(value);
-  const { data } = await supabase.from('condominios').select('id, nome');
-  const match = (data || []).find((row) => {
-    const rowSlug = slugCondominio(row.nome);
-    return rowSlug === slug || String(row.nome || '').toLowerCase().trim() === value.toLowerCase();
-  });
-  return match?.id || '';
+  const [{ data: construtoras }, { data: condos }] = await Promise.all([
+    supabase.from('construtoras').select('id, nome, nome_fantasia, razao_social, dominio'),
+    supabase.from('condominios').select('id, nome, dominio'),
+  ]);
+  const bySlug = (rows, tipo) => {
+    const match = (rows || []).find((row) => {
+      const names = [row.nome, row.nome_fantasia, row.razao_social].filter(Boolean);
+      return names.some((name) => {
+        const rowSlug = slugCondominio(name);
+        return rowSlug === slug || String(name || '').toLowerCase().trim() === value.toLowerCase();
+      });
+    });
+    return match?.id ? { tipo, id: match.id } : null;
+  };
+  return bySlug(construtoras, 'construtora') || bySlug(condos, 'condominio');
 }
 
 export function conviteUrl(token) {
@@ -182,14 +218,30 @@ function emptyBrand() {
   return { nome: '', logo: '', capa: '', visaoGeral: '', login: '' };
 }
 
+function asMarcaRow(data) {
+  if (!data) return null;
+  let row = data;
+  if (typeof row === 'string') {
+    try {
+      row = JSON.parse(row);
+    } catch {
+      return null;
+    }
+  }
+  if (Array.isArray(row)) row = row[0];
+  if (!row || typeof row !== 'object') return null;
+  return row;
+}
+
 function applyRpc(brand, row) {
-  if (!row || typeof row !== 'object') return;
-  brand.nome = row.nome || brand.nome;
+  const data = asMarcaRow(row);
+  if (!data) return {};
+  brand.nome = data.nome || brand.nome;
   return {
-    logo: row.logo || row.logo_path || '',
-    capa: row.capa || '',
-    visao_geral: row.visao_geral || '',
-    login: row.login || '',
+    logo: data.logo || data.logo_path || '',
+    capa: data.capa || '',
+    visao_geral: data.visao_geral || '',
+    login: data.login || '',
   };
 }
 
@@ -241,26 +293,64 @@ async function fillFromTables(condoId, brand) {
   }
 }
 
+export async function loadBrandingConstrutora(id) {
+  const brand = emptyBrand();
+  if (!id || !supabase) return brand;
+
+  const rpc = await supabase.rpc('marca_construtora', { p_id: id });
+  if (!rpc.error && rpc.data) {
+    const row = typeof rpc.data === 'string' ? JSON.parse(rpc.data) : rpc.data;
+    brand.nome = row?.nome || row?.nome_fantasia || brand.nome;
+    brand.razaoSocial = row?.razao_social || '';
+    brand.nomeFantasia = row?.nome_fantasia || brand.nome;
+    if (row?.logo) brand.logo = await signPath(row.logo);
+  }
+  if (!brand.nome || !brand.logo) {
+    const { data } = await supabase
+      .from('construtoras')
+      .select('nome, nome_fantasia, razao_social, logo_path')
+      .eq('id', id)
+      .maybeSingle();
+    brand.nome = brand.nome || nomeExibicaoConstrutora(data);
+    brand.razaoSocial = brand.razaoSocial || data?.razao_social || '';
+    brand.nomeFantasia = brand.nomeFantasia || data?.nome_fantasia || brand.nome;
+    if (!brand.logo && data?.logo_path) brand.logo = await signPath(data.logo_path);
+  }
+  return brand;
+}
+
 export async function loadBranding(condoId) {
   const brand = emptyBrand();
   if (!condoId || !supabase) return brand;
 
-  const rpc = await supabase.rpc('marca_condominio', { p_condominio_id: condoId });
-  if (!rpc.error && rpc.data) {
-    const row = typeof rpc.data === 'string' ? JSON.parse(rpc.data) : rpc.data;
-    brand.nome = row?.nome || brand.nome;
-    const paths = applyRpc(brand, row) || {};
-    if (paths.logo) brand.logo = await signPath(paths.logo);
-    if (paths.capa) brand.capa = await signPath(paths.capa, COVER_TRANSFORM);
-    if (paths.visao_geral) brand.visaoGeral = await signPath(paths.visao_geral, COMPACT_TRANSFORM);
-    if (paths.login) brand.login = await signPath(paths.login, COMPACT_TRANSFORM);
+  try {
+    const rpc = await supabase.rpc('marca_condominio', { p_condominio_id: condoId });
+    if (!rpc.error && rpc.data) {
+      const row = asMarcaRow(rpc.data);
+      brand.nome = row?.nome || brand.nome;
+      const paths = applyRpc(brand, row);
+      if (paths.logo) brand.logo = await signPath(paths.logo);
+      if (paths.capa) brand.capa = await signPath(paths.capa, COVER_TRANSFORM);
+      if (paths.visao_geral) brand.visaoGeral = await signPath(paths.visao_geral, COMPACT_TRANSFORM);
+      if (paths.login) brand.login = await signPath(paths.login, COMPACT_TRANSFORM);
+    }
+  } catch {
+    /* continua pelos fallbacks */
   }
 
   if (!brand.logo || !brand.capa || !brand.visaoGeral || !brand.login) {
-    await fillFromStorageFolder(condoId, brand);
+    try {
+      await fillFromStorageFolder(condoId, brand);
+    } catch {
+      /* ok */
+    }
   }
   if (!brand.logo || !brand.capa || !brand.visaoGeral || !brand.login || !brand.nome) {
-    await fillFromTables(condoId, brand);
+    try {
+      await fillFromTables(condoId, brand);
+    } catch {
+      /* ok */
+    }
   }
   return brand;
 }

@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import { useSession } from '../lib/session';
-import { can, STATUS_LABEL } from '../lib/permissions';
-import { chamadoNumero, formatDate, formatDateTime } from '../lib/format';
+import { can, ehChamadoAdministracao, STATUS_LABEL } from '../lib/permissions';
+import { chamadoNumero, formatDate, formatDateTime, labelUnidade } from '../lib/format';
 import { agendarVisitaChamado, listarChamadosCondominio, listarVisitasAgendadas } from '../lib/api';
 import { toInputDate } from '../lib/ocorrenciasRelatorio';
 import { horarioDoEvento, tituloRastreabilidade } from '../lib/chamadoRastreabilidade';
-import { Alert, Badge, Btn, Empty, Field, Page } from '../components/ui';
+import { Alert, Badge, Btn, ChamadoAdminTag, Empty, Field, Page } from '../components/ui';
 import { Icon } from '../components/icons';
 import { Modal } from '../components/DataList';
 
@@ -20,17 +20,22 @@ function VisitCard({ visita }) {
   const chamado = visita.chamado;
   const hora = horarioDoEvento(visita);
   const quando = visita.data_ocorrencia || visita.created_at;
+  const daAdmin = ehChamadoAdministracao(chamado);
   return (
-    <article className="visit-card">
+    <article className={`visit-card${daAdmin ? ' visit-card--admin' : ''}`}>
       <div className="visit-card-top">
         <strong>{formatDate(quando)}{hora ? ` · ${hora}` : ''}</strong>
-        {chamado ? <Badge value={chamado.status} /> : null}
+        <span className="ticket-card-tags">
+          {daAdmin ? <ChamadoAdminTag /> : null}
+          {chamado ? <Badge value={chamado.status} /> : null}
+        </span>
       </div>
       <span className="visit-card-title">
         {chamado ? `${chamadoNumero(chamado.numero_registro)} · ${chamado.titulo}` : tituloRastreabilidade(visita)}
       </span>
       <small>
-        {chamado?.unidades?.identificacao || chamado?.locais?.nome || 'Chamado'}
+        {daAdmin ? 'Administração do condomínio · ' : ''}
+        {labelUnidade(chamado?.unidades) || chamado?.locais?.nome || 'Chamado'}
         {chamado?.usuarios?.nome ? ` · ${chamado.usuarios.nome}` : ''}
         {' · '}
         Agendado em {formatDateTime(visita.created_at)}
@@ -127,7 +132,7 @@ export function AgendarVisitaForm({
         </Field>
       </div>
       <p className="hint">
-        Ao agendar, o chamado recebe um alerta no chat e um registro “Visita agendada, data: …” na rastreabilidade.
+        Ao agendar, o chat destaca a visita e a rastreabilidade registra “Visita agendada, data: …”.
         A inspeção em si só entra depois, manualmente, no dia da visita.
       </p>
       <div className="row">
@@ -198,7 +203,7 @@ export function AgendarVisitaPage() {
     const text = q.trim().toLowerCase();
     if (!text) return abertos;
     return abertos.filter((row) => {
-      const blob = `${row.titulo} ${row.numero_registro} ${row.usuarios?.nome || ''} ${row.unidades?.identificacao || ''} ${row.locais?.nome || ''}`.toLowerCase();
+      const blob = `${row.titulo} ${row.numero_registro} ${row.usuarios?.nome || ''} ${labelUnidade(row.unidades)} ${row.locais?.nome || ''}`.toLowerCase();
       return blob.includes(text);
     });
   }, [abertos, q]);
@@ -245,7 +250,7 @@ export function AgendarVisitaPage() {
                 {opcoes.map((row) => (
                   <option key={row.id} value={row.id}>
                     {chamadoNumero(row.numero_registro)} · {row.titulo}
-                    {row.unidades?.identificacao ? ` · ${row.unidades.identificacao}` : ''}
+                    {labelUnidade(row.unidades) ? ` · ${labelUnidade(row.unidades)}` : ''}
                     {` · ${STATUS_LABEL[row.status] || row.status}`}
                   </option>
                 ))}

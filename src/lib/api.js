@@ -1,12 +1,14 @@
 import { supabase } from './supabase';
-import { fileKind, formatDbError, normalizarCnpj } from './format.js';
-import { buildCondoSeed, validarCriacaoCondominio } from './parseSeed.js';
+import { embedOne, fileKind, formatDbError, formatTelefone, labelUnidade, normalizarCnpj } from './format.js';
+import { buildCondoSeed, validarCriacaoCondominio, nomeEmpresaKey } from './parseSeed.js';
+import { areaForLocal, tipoForLocal } from './localIcon.js';
 import { normalizarDominio } from './branding.js';
 import {
   TIPO_INSPECAO_AGENDADA,
   eventoEhInspecaoAgendada,
   isoAgendamento,
   mensagemChatVisita,
+  previewTextoChat,
   proximaVisitaAgendada,
   tituloInspecaoAgendada,
   visitaAgendadaDeMensagens,
@@ -98,13 +100,22 @@ export function publicOrSignedUrl(path) {
   return supabase.storage.from('condominios').createSignedUrl(path, 60 * 60);
 }
 
+function isMissingColumnError(error) {
+  const code = String(error?.code || '');
+  const msg = String(error?.message || error?.details || '');
+  return code === 'PGRST204'
+    || /schema cache/i.test(msg)
+    || /could not find the '[^']+' column/i.test(msg)
+    || /column .+ does not exist/i.test(msg);
+}
+
 async function insertRows(table, rows, optionalKeys = []) {
   if (!rows?.length) return;
   const { error } = await supabase.from(table).insert(rows);
   if (!error) return;
   const msg = String(error.message || error.details || '');
   // Coluna ainda não existe — tenta de novo sem os campos opcionais
-  if (optionalKeys.length && /schema cache|could not find|does not exist|column/i.test(msg)) {
+  if (optionalKeys.length && isMissingColumnError(error)) {
     const stripped = rows.map((row) => {
       const next = { ...row };
       for (const key of optionalKeys) delete next[key];
@@ -113,188 +124,343 @@ async function insertRows(table, rows, optionalKeys = []) {
     return insertRows(table, stripped);
   }
   // Coluna/tabela ainda não existe no schema — ignora partes opcionais do seed
-  if (/schema cache|could not find|does not exist|column/i.test(msg)) return;
+  if (isMissingColumnError(error) || /could not find the table/i.test(msg)) return;
   // Duplicata em listas/vínculos — segue
   if (error.code === '23505' || /duplicate key|unique constraint/i.test(msg)) return;
   throw new Error(formatDbError(error, table));
 }
 
-async function upsertJoin(table, row, conflict) {
-  const { error } = await supabase.from(table).upsert(row, {
+async function upsertJoinRows(table, rows, conflict) {
+  if (!rows?.length) return;
+  const { error } = await supabase.from(table).upsert(rows, {
     onConflict: conflict,
     ignoreDuplicates: true,
   });
   if (!error) return;
   const msg = String(error.message || error.details || '');
-  if (/schema cache|could not find|does not exist|column/i.test(msg)) return;
+  if (/no unique|ON CONFLICT|schema cache|could not find|does not exist|column/i.test(msg)) {
+    return insertRows(table, rows);
+  }
   if (error.code === '23505' || /duplicate key|unique constraint/i.test(msg)) return;
   throw new Error(formatDbError(error, table));
 }
 
-async function findOrCreate(table, match, payload) {
-  const selectCols = table === 'materiais' ? 'id, fornecedor_id' : 'id';
-  const { data: existing } = await supabase.from(table).select(selectCols).match(match).maybeSingle();
-  if (existing?.id) {
-    // Reforça vínculo material → fornecedor quando a linha base já existia
-    if (table === 'materiais' && payload?.fornecedor_id && existing.fornecedor_id !== payload.fornecedor_id) {
-      await supabase.from('materiais').update({ fornecedor_id: payload.fornecedor_id }).eq('id', existing.id);
-    }
-    return existing.id;
-  }
-  const { data, error } = await supabase.from(table).insert(payload).select('id').single();
-  if (error) {
-    const msg = String(error.message || error.details || '');
-    if (/schema cache|could not find|does not exist|column/i.test(msg)) return null;
-    if (error.code === '23505' || /duplicate key|unique constraint/i.test(msg)) {
-      const again = await supabase.from(table).select('id').match(match).maybeSingle();
-      return again.data?.id || null;
-    }
-    throw new Error(formatDbError(error, table));
-  }
-  return data?.id || null;
+function nomeKey(value) {
+  return nomeEmpresaKey(value);
 }
 
-async function popularCondominioCliente(condoId, seed, userId) {
-  if (seed.visao_geral) {
-    await insertRows('visao_geral_secoes', [{ condominio_id: condoId, titulo: 'Visão geral', texto: seed.visao_geral, ordem: 0 }]);
+async function mapNomes(table, condoId) {
+  const { data, error } = await supabase.from(table).select('id, nome').eq('condominio_id', condoId);
+  if (error) throw new Error(formatDbError(error, table));
+  const map = new Map();
+  for (const row of data || []) {
+    const key = nomeKey(row.nome);
+    if (key && !map.has(key)) map.set(key, row.id);
   }
-  if (seed.sobre_empreendimento) {
-    await insertRows('empreendimento_secoes', [{ condominio_id: condoId, titulo: 'Sobre o empreendimento', texto: seed.sobre_empreendimento, ordem: 0 }]);
-  }
-  if (seed.sobre_nos) {
-    await insertRows('sobre_nos', [{ condominio_id: condoId, titulo: 'Sobre nós', texto: seed.sobre_nos, ordem: 0 }]);
-  }
-  if (seed.assistencia_tecnica) {
-    await insertRows('visao_geral_secoes', [{ condominio_id: condoId, titulo: 'Assistência técnica', texto: seed.assistencia_tecnica, ordem: 1 }]);
-  }
-  if (seed.boletim_titulo && seed.boletim_texto) {
-    await insertRows('boletins_informativos', [{
-      condominio_id: condoId,
-      autor_id: userId,
-      titulo: seed.boletim_titulo,
-      texto: seed.boletim_texto,
-      publicado: true,
-      data_publicacao: new Date().toISOString(),
-    }]);
-  }
-  if (seed.email) {
-    await insertRows('contatos', [{ condominio_id: condoId, nome: 'Condomínio', email: seed.email, ordem: 0, ativo: true }]);
-  }
+  return map;
+}
 
-  await insertRows('fornecedores', seed.fornecedores.map((row) => ({
-    condominio_id: condoId,
-    nome: row.nome,
-    cnpj: normalizarCnpj(row.cnpj),
-    contato: row.contato || null,
-    telefone: row.telefone || null,
-    telefone1: row.telefone1 || null,
-    telefone2: row.telefone2 || null,
-    localizacao: row.localizacao || null,
-  })), ['telefone1', 'telefone2', 'localizacao', 'contato']);
-  await insertRows('materiais', seed.materiais.map((row) => ({
-    condominio_id: condoId,
-    nome: row.nome,
-  })));
-  await insertRows('locais', seed.locais.map((row) => ({
-    condominio_id: condoId,
-    nome: row.nome,
-    tipo: 'outro',
-    descricao: row.descricao || null,
-  })));
-  await insertRows('garantias', seed.garantias.map((row) => {
-    const unidade = String(row.prazo_unidade || '').trim().toLowerCase();
-    const prazoUnidade = ['dias', 'meses', 'anos'].includes(unidade) ? unidade : (unidade || null);
-    const prazoValor = row.prazo_valor !== '' && row.prazo_valor != null
-      ? Number(String(row.prazo_valor).replace(/\D/g, '')) || null
-      : null;
-    return {
+async function insertNamedRows(table, rows, optionalKeys = []) {
+  if (!rows?.length) return [];
+  const { data, error } = await supabase.from(table).insert(rows).select('id, nome');
+  if (!error) return data || [];
+  const msg = String(error.message || error.details || '');
+  if (optionalKeys.length && isMissingColumnError(error)) {
+    const stripped = rows.map((row) => {
+      const next = { ...row };
+      for (const key of optionalKeys) delete next[key];
+      return next;
+    });
+    return insertNamedRows(table, stripped);
+  }
+  if (isMissingColumnError(error) || /could not find the table/i.test(msg)) return [];
+  if (error.code === '23505' || /duplicate key|unique constraint/i.test(msg)) return [];
+  throw new Error(formatDbError(error, table));
+}
+
+async function ensureNomes(table, condoId, names, extra, optionalKeys = []) {
+  const map = await mapNomes(table, condoId);
+  const missing = [];
+  const seen = new Set();
+  for (const name of names) {
+    const key = nomeKey(name);
+    if (!key || map.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    missing.push({
+      condominio_id: condoId,
+      nome: String(name).trim(),
+      ...(typeof extra === 'function' ? extra(name) : extra || {}),
+    });
+  }
+  if (!missing.length) return map;
+  const inserted = await insertNamedRows(table, missing, optionalKeys);
+  for (const row of inserted) {
+    const key = nomeKey(row.nome);
+    if (key) map.set(key, row.id);
+  }
+  if (inserted.length < missing.length) {
+    const again = await mapNomes(table, condoId);
+    for (const [key, id] of again) map.set(key, id);
+  }
+  return map;
+}
+
+async function mapPool(items, limit, fn) {
+  const list = items || [];
+  if (!list.length) return [];
+  const out = new Array(list.length);
+  let index = 0;
+  async function worker() {
+    while (index < list.length) {
+      const current = index;
+      index += 1;
+      out[current] = await fn(list[current], current);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, list.length) }, () => worker()));
+  return out;
+}
+
+async function popularCondominioCliente(condoId, seed, userId, fornecedorLogos) {
+  await Promise.all([
+    seed.visao_geral
+      ? insertRows('visao_geral_secoes', [{ condominio_id: condoId, titulo: 'Visão geral', texto: seed.visao_geral, ordem: 0 }])
+      : null,
+    seed.sobre_empreendimento
+      ? insertRows('empreendimento_secoes', [{ condominio_id: condoId, titulo: 'Sobre o empreendimento', texto: seed.sobre_empreendimento, ordem: 0 }])
+      : null,
+    seed.sobre_nos
+      ? insertRows('sobre_nos', [{ condominio_id: condoId, titulo: 'Sobre nós', texto: seed.sobre_nos, ordem: 0 }])
+      : null,
+    seed.assistencia_tecnica
+      ? insertRows('visao_geral_secoes', [{ condominio_id: condoId, titulo: 'Assistência técnica', texto: seed.assistencia_tecnica, ordem: 1 }])
+      : null,
+    seed.boletim_titulo && seed.boletim_texto
+      ? insertRows('boletins_informativos', [{
+        condominio_id: condoId,
+        autor_id: userId,
+        titulo: seed.boletim_titulo,
+        texto: seed.boletim_texto,
+        publicado: true,
+        data_publicacao: new Date().toISOString(),
+      }])
+      : null,
+    seed.email
+      ? insertRows('contatos', [{ condominio_id: condoId, nome: 'Condomínio', email: seed.email, ordem: 0, ativo: true }])
+      : null,
+  ]);
+
+  await Promise.all([
+    insertRows('fornecedores', seed.fornecedores.map((row) => ({
+      condominio_id: condoId,
+      nome: row.nome_fantasia || row.nome,
+      razao_social: row.razao_social || null,
+      nome_fantasia: row.nome_fantasia || row.nome || null,
+      cnpj: normalizarCnpj(row.cnpj),
+      contato: row.contato || null,
+      telefone: formatTelefone(row.telefone) || null,
+      telefone1: formatTelefone(row.telefone1) || null,
+      telefone2: formatTelefone(row.telefone2) || null,
+      localizacao: row.localizacao || null,
+    })), ['telefone1', 'telefone2', 'localizacao', 'contato', 'logo_path', 'razao_social', 'nome_fantasia']),
+    insertRows('materiais', seed.materiais.map((row) => ({
       condominio_id: condoId,
       nome: row.nome,
-      prazo_valor: prazoValor,
-      prazo_unidade: prazoUnidade,
-      data_fim: row.data_fim || null,
-      motivos_perda_garantia: row.motivos_perda_garantia || null,
-      descricao: row.descricao || null,
-      telefone: row.telefone || null,
-    };
-  }), ['telefone', 'prazo_valor', 'prazo_unidade', 'data_fim', 'motivos_perda_garantia']);
-  await insertRows('unidades', seed.unidades.map((row) => ({
-    condominio_id: condoId,
-    identificacao: row.identificacao,
-    bloco: row.bloco || null,
-    andar: row.andar || null,
-  })));
-  await insertRows('contatos', seed.contatos.map((row, index) => ({
-    condominio_id: condoId,
-    nome: row.nome,
-    telefone: row.telefone || null,
-    email: row.email || null,
-    subtitulo: row.subtitulo || null,
-    ordem: index + 1,
-    ativo: true,
-  })));
-
-  for (const linha of seed.linhas_base || []) {
-    let fornecedorId = null;
-    let materialId = null;
-    let localId = null;
-    let garantiaId = null;
-    if (linha.fornecedor) {
-      fornecedorId = await findOrCreate('fornecedores', { condominio_id: condoId, nome: linha.fornecedor }, {
-        condominio_id: condoId,
-        nome: linha.fornecedor,
-      });
-    }
-    if (linha.material) {
-      materialId = await findOrCreate('materiais', { condominio_id: condoId, nome: linha.material }, {
-        condominio_id: condoId,
-        nome: linha.material,
-        fornecedor_id: fornecedorId,
-      });
-    }
-    if (linha.local) {
-      localId = await findOrCreate('locais', { condominio_id: condoId, nome: linha.local }, {
-        condominio_id: condoId,
-        nome: linha.local,
-        tipo: 'outro',
-      });
-    }
-    if (linha.garantia) {
-      garantiaId = await findOrCreate('garantias', { condominio_id: condoId, nome: linha.garantia }, {
-        condominio_id: condoId,
-        nome: linha.garantia,
-      });
-    }
-    if (materialId && localId) {
-      try {
-        await upsertJoin('material_locais', { material_id: materialId, local_id: localId }, 'material_id,local_id');
-      } catch { /* vínculo complementar */ }
-    }
-    if (materialId && garantiaId) {
-      try {
-        await upsertJoin('material_garantias', { material_id: materialId, garantia_id: garantiaId }, 'material_id,garantia_id');
-      } catch { /* vínculo complementar */ }
-    }
-    if (fornecedorId && garantiaId) {
-      try {
-        await upsertJoin('fornecedor_garantias', { fornecedor_id: fornecedorId, garantia_id: garantiaId }, 'fornecedor_id,garantia_id');
-      } catch { /* vínculo complementar */ }
-    }
-  }
-
-  for (const user of seed.usuarios || []) {
-    if (!user.email) continue;
-    const { data: profile } = await supabase.from('usuarios').select('id').eq('email', user.email).maybeSingle();
-    if (!profile?.id) continue;
-    const cargoTipo = String(user.cargo || 'morador').toLowerCase().replace(/\s+/g, '_');
-    const { data: cargo } = await supabase.from('cargos').select('id').eq('tipo', cargoTipo).maybeSingle();
-    await insertRows('usuario_condominio', [{
-      usuario_id: profile.id,
+    }))),
+    insertRows('locais', seed.locais.map((row) => ({
       condominio_id: condoId,
-      cargo_id: cargo?.id || null,
+      nome: row.nome,
+      tipo: tipoForLocal(row.nome, row.descricao),
+      area: areaForLocal(row.nome, row.descricao, row.area),
+      descricao: row.descricao || null,
+    })), ['area']),
+    insertRows('garantias', seed.garantias.map((row) => {
+      const unidade = String(row.prazo_unidade || '').trim().toLowerCase();
+      const prazoUnidade = ['dias', 'meses', 'anos'].includes(unidade) ? unidade : (unidade || null);
+      const prazoValor = row.prazo_valor !== '' && row.prazo_valor != null
+        ? Number(String(row.prazo_valor).replace(/\D/g, '')) || null
+        : null;
+      return {
+        condominio_id: condoId,
+        nome: row.nome,
+        prazo_valor: prazoValor,
+        prazo_unidade: prazoUnidade,
+        data_fim: row.data_fim || null,
+        motivos_perda_garantia: row.motivos_perda_garantia || null,
+        descricao: row.descricao || null,
+        telefone: formatTelefone(row.telefone) || null,
+      };
+    }), ['telefone', 'prazo_valor', 'prazo_unidade', 'data_fim', 'motivos_perda_garantia']),
+    insertRows('unidades', [
+      ...((seed.unidades || []).some((row) => {
+        const n = String(row.identificacao || '')
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .toLowerCase()
+          .trim();
+        return n === 'areas comuns';
+      }) ? [] : [{ condominio_id: condoId, identificacao: 'Áreas comuns' }]),
+      ...(seed.unidades || []).map((row) => ({
+        condominio_id: condoId,
+        identificacao: row.identificacao,
+        bloco: row.bloco || null,
+        andar: row.andar || null,
+      })),
+    ]),
+    insertRows('contatos', seed.contatos.map((row, index) => ({
+      condominio_id: condoId,
+      nome: row.nome,
+      telefone: formatTelefone(row.telefone) || null,
+      email: row.email || null,
+      subtitulo: row.subtitulo || null,
+      ordem: index + 1,
       ativo: true,
-    }]);
+    }))),
+  ]);
+
+  const linhas = seed.linhas_base || [];
+  if (linhas.length) {
+    const fornByMat = new Map();
+    for (const linha of linhas) {
+      const mat = nomeKey(linha.material);
+      const forn = nomeKey(linha.fornecedor);
+      if (mat && forn && !fornByMat.has(mat)) fornByMat.set(mat, forn);
+    }
+
+    const [fornMap, locMap, garMap] = await Promise.all([
+      ensureNomes('fornecedores', condoId, linhas.map((linha) => linha.fornecedor)),
+      ensureNomes('locais', condoId, linhas.map((linha) => linha.local), (name) => ({
+        tipo: tipoForLocal(name),
+        area: areaForLocal(name),
+      }), ['area']),
+      ensureNomes('garantias', condoId, linhas.map((linha) => linha.garantia)),
+    ]);
+    const matMap = await ensureNomes(
+      'materiais',
+      condoId,
+      linhas.map((linha) => linha.material),
+      (name) => ({ fornecedor_id: fornMap.get(fornByMat.get(nomeKey(name))) || null }),
+      ['fornecedor_id'],
+    );
+
+    const joinsML = [];
+    const joinsMG = [];
+    const joinsFG = [];
+    const seenML = new Set();
+    const seenMG = new Set();
+    const seenFG = new Set();
+    for (const linha of linhas) {
+      const fornecedorId = fornMap.get(nomeKey(linha.fornecedor));
+      const materialId = matMap.get(nomeKey(linha.material));
+      const localId = locMap.get(nomeKey(linha.local));
+      const garantiaId = garMap.get(nomeKey(linha.garantia));
+      if (materialId && localId) {
+        const key = `${materialId}:${localId}`;
+        if (!seenML.has(key)) {
+          seenML.add(key);
+          joinsML.push({ material_id: materialId, local_id: localId });
+        }
+      }
+      if (materialId && garantiaId) {
+        const key = `${materialId}:${garantiaId}`;
+        if (!seenMG.has(key)) {
+          seenMG.add(key);
+          joinsMG.push({ material_id: materialId, garantia_id: garantiaId });
+        }
+      }
+      if (fornecedorId && garantiaId) {
+        const key = `${fornecedorId}:${garantiaId}`;
+        if (!seenFG.has(key)) {
+          seenFG.add(key);
+          joinsFG.push({ fornecedor_id: fornecedorId, garantia_id: garantiaId });
+        }
+      }
+    }
+
+    await Promise.all([
+      upsertJoinRows('material_locais', joinsML, 'material_id,local_id'),
+      upsertJoinRows('material_garantias', joinsMG, 'material_id,garantia_id'),
+      upsertJoinRows('fornecedor_garantias', joinsFG, 'fornecedor_id,garantia_id'),
+    ]).catch(() => { /* vínculo complementar */ });
   }
+
+  const usuarios = (seed.usuarios || []).filter((user) => user.email);
+  if (usuarios.length) {
+    const emails = [...new Set(usuarios.map((user) => String(user.email).trim()))];
+    const [{ data: profiles, error: profilesErr }, { data: cargos, error: cargosErr }] = await Promise.all([
+      supabase.from('usuarios').select('id, email').in('email', emails),
+      supabase.from('cargos').select('id, tipo'),
+    ]);
+    if (profilesErr) throw new Error(formatDbError(profilesErr, 'usuarios'));
+    if (cargosErr) throw new Error(formatDbError(cargosErr, 'cargos'));
+    const profileByEmail = new Map(
+      (profiles || []).map((row) => [String(row.email || '').trim().toLowerCase(), row.id]),
+    );
+    const cargoByTipo = new Map((cargos || []).map((row) => [row.tipo, row.id]));
+    await insertRows('usuario_condominio', usuarios.flatMap((user) => {
+      const usuarioId = profileByEmail.get(String(user.email).trim().toLowerCase());
+      if (!usuarioId) return [];
+      const cargoTipo = String(user.cargo || 'morador').toLowerCase().replace(/\s+/g, '_');
+      return [{
+        usuario_id: usuarioId,
+        condominio_id: condoId,
+        cargo_id: cargoByTipo.get(cargoTipo) || cargoByTipo.get('morador') || null,
+        ativo: true,
+      }];
+    }));
+  }
+
+  await aplicarLogosFornecedores(condoId, userId, fornecedorLogos);
+}
+
+async function aplicarLogosFornecedores(condoId, userId, logos) {
+  if (!condoId || !logos) return;
+  const entries = Object.entries(logos).filter(([, value]) => {
+    const file = value?.file || value;
+    return file instanceof File;
+  });
+  if (!entries.length) return;
+  const map = await mapNomes('fornecedores', condoId);
+  await mapPool(entries, 3, async ([key, value]) => {
+    const file = value?.file || value;
+    const id = map.get(key);
+    if (!id || !file) return null;
+    try {
+      const arquivo = await uploadArquivo({
+        condominioId: condoId,
+        userId,
+        file,
+        folder: 'fornecedores',
+        quality: 'original',
+      });
+      const { error } = await supabase
+        .from('fornecedores')
+        .update({ logo_path: arquivo.storage_path })
+        .eq('id', id);
+      if (error && /logo_path|schema cache|does not exist|column/i.test(error.message || '')) return null;
+      if (error) throw error;
+    } catch {
+      return null;
+    }
+    return id;
+  });
+}
+
+export async function salvarLogoFornecedor({ condominioId, userId, fornecedorId, file }) {
+  if (!file || !fornecedorId) return null;
+  const arquivo = await uploadArquivo({
+    condominioId,
+    userId,
+    file,
+    folder: 'fornecedores',
+    quality: 'original',
+  });
+  const { error } = await supabase
+    .from('fornecedores')
+    .update({ logo_path: arquivo.storage_path })
+    .eq('id', fornecedorId);
+  if (error) throw new Error(formatDbError(error, 'fornecedores'));
+  return arquivo.storage_path;
 }
 
 /** Valida no cliente; só então cria o condomínio com a RPC já existente. */
@@ -322,7 +488,23 @@ export async function criarCondominio(form, userId) {
     condoId = data;
     if (!condoId) throw new Error('Não foi possível criar o condomínio.');
 
-    await popularCondominioCliente(condoId, seed, userId);
+    if (form.construtora_id) {
+      const rpc = await supabase.rpc('vincular_condominio_a_construtora', {
+        p_condominio_id: condoId,
+        p_construtora_id: form.construtora_id,
+      });
+      if (rpc.error) {
+        const link = await supabase
+          .from('condominios')
+          .update({ construtora_id: form.construtora_id })
+          .eq('id', condoId);
+        if (link.error) {
+          throw new Error('Não foi possível vincular o condomínio à construtora. Rode o SQL condo-construtora-vinculo.sql no Supabase.');
+        }
+      }
+    }
+
+    await popularCondominioCliente(condoId, seed, userId, form.fornecedorLogos);
 
     async function saveNamedImage(file, folder, titulo, tipo) {
       if (!file) return null;
@@ -350,18 +532,18 @@ export async function criarCondominio(form, userId) {
       return arquivo;
     }
 
-    const logo = await saveNamedImage(form.logo, 'marca', 'Logo', 'logo');
-    await saveNamedImage(form.imagem_visao_geral, 'marca', 'Imagem visão geral', 'visao_geral');
-    await saveNamedImage(form.imagem_capa, 'marca', 'Imagem capa', 'capa');
-    await saveNamedImage(form.imagem_login, 'marca', 'Imagem login', 'login');
+    const [logo] = await Promise.all([
+      saveNamedImage(form.logo, 'marca', 'Logo', 'logo'),
+      saveNamedImage(form.imagem_visao_geral, 'marca', 'Imagem visão geral', 'visao_geral'),
+      saveNamedImage(form.imagem_capa, 'marca', 'Imagem capa', 'capa'),
+      saveNamedImage(form.imagem_login, 'marca', 'Imagem login', 'login'),
+    ]);
     if (logo?.storage_path) {
       await supabase.from('condominios').update({ logo_path: logo.storage_path }).eq('id', condoId);
     }
 
-    for (const file of form.imagens || []) {
-      await saveNamedImage(file, 'imagens', file.name);
-    }
-    for (const file of form.documentos || []) {
+    await mapPool(form.imagens || [], 4, (file) => saveNamedImage(file, 'imagens', file.name));
+    await mapPool(form.documentos || [], 3, async (file) => {
       try {
         const arquivo = await uploadArquivo({ condominioId: condoId, userId, file, folder: 'documentos' });
         await insertRows('documentos_empreendimento', [{
@@ -372,7 +554,7 @@ export async function criarCondominio(form, userId) {
       } catch {
         /* documento opcional — não aborta a criação do condomínio */
       }
-    }
+    });
 
     return condoId;
   } catch (err) {
@@ -402,6 +584,186 @@ export async function salvarDominioCondominio(condoId, dominio) {
   return value || '';
 }
 
+export async function listarConstrutoras() {
+  const { data, error } = await supabase
+    .from('construtoras')
+    .select('*')
+    .order('nome');
+  if (error) throw new Error(formatDbError(error, 'construtoras'));
+  return data || [];
+}
+
+export async function criarConstrutora(form) {
+  const razaoSocial = String(form?.razao_social || '').trim();
+  const nomeFantasia = String(form?.nome_fantasia || form?.nome || '').trim();
+  if (razaoSocial.length < 2) throw new Error('Informe a razão social da construtora.');
+  if (nomeFantasia.length < 2) throw new Error('Informe o nome fantasia da construtora.');
+  if (!form?.logo) throw new Error('Envie a logomarca da construtora.');
+
+  const payload = {
+    nome: nomeFantasia,
+    razao_social: razaoSocial,
+    nome_fantasia: nomeFantasia,
+    cnpj: normalizarCnpj(form?.cnpj) || null,
+    email: String(form?.email || '').trim() || null,
+    descricao: String(form?.descricao || '').trim() || null,
+    ativo: true,
+  };
+  const { data, error } = await supabase.from('construtoras').insert(payload).select('id').single();
+  if (error) {
+    throw new Error(
+      /schema cache|could not find the table|construtoras|razao_social|nome_fantasia/i.test(error.message || '')
+        ? 'Rode o SQL construtoras.sql no Supabase para atualizar a tabela de construtoras.'
+        : formatDbError(error, 'construtoras'),
+    );
+  }
+  const id = data?.id;
+  if (!id) throw new Error('Não foi possível criar a construtora.');
+
+  if (form?.logo) {
+    const ext = (form.logo.name.split('.').pop() || 'png').toLowerCase().replace(/[^a-z0-9]/g, '') || 'png';
+    const path = `${id}/marca/logo.${ext}`;
+    const up = await supabase.storage.from('condominios').upload(path, form.logo, {
+      upsert: true,
+      contentType: form.logo.type || undefined,
+    });
+    if (!up.error) {
+      await supabase.from('construtoras').update({ logo_path: path }).eq('id', id);
+    }
+  }
+  return id;
+}
+
+export async function salvarDominioConstrutora(id, dominio) {
+  if (!id) throw new Error('Construtora inválida.');
+  const rpc = await supabase.rpc('salvar_dominio_construtora', {
+    p_construtora_id: id,
+    p_dominio: dominio || null,
+  });
+  if (!rpc.error) return rpc.data || '';
+  const value = normalizarDominio(dominio) || null;
+  const { error } = await supabase.from('construtoras').update({ dominio: value }).eq('id', id);
+  if (error) throw error;
+  return value || '';
+}
+
+export async function criarUsuarioConstrutora({ construtoraId, email, password, nome, escopoCondominioIds }) {
+  if (!construtoraId) throw new Error('Construtora inválida.');
+  const payload = {
+    p_construtora_id: construtoraId,
+    p_email: String(email || '').trim().toLowerCase(),
+    p_senha: password,
+    p_nome: nome || null,
+    p_escopo_condominio_ids: escopoCondominioIds?.length ? escopoCondominioIds : null,
+  };
+  let { data, error } = await supabase.rpc('criar_usuario_construtora', payload);
+  if (error && /p_escopo|could not find/i.test(error.message || '')) {
+    const fallback = await supabase.rpc('criar_usuario_construtora', {
+      p_construtora_id: construtoraId,
+      p_email: payload.p_email,
+      p_senha: password,
+      p_nome: nome || null,
+    });
+    data = fallback.data;
+    error = fallback.error;
+  }
+  if (error) throw error;
+  return data;
+}
+
+export async function listarUsuariosConstrutora(construtoraId) {
+  if (!construtoraId) return [];
+  const { data, error } = await supabase.rpc('listar_usuarios_construtora', {
+    p_construtora_id: construtoraId,
+  });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function urlFotoUsuario(path) {
+  if (!path || !supabase) return '';
+  const signed = await supabase.storage.from('condominios').createSignedUrl(path, 60 * 60 * 24 * 7);
+  return signed.data?.signedUrl || '';
+}
+
+export async function salvarFotoUsuario(userId, file) {
+  if (!userId) throw new Error('Usuário inválido.');
+  if (!file) throw new Error('Selecione uma foto.');
+  if (!file.type?.startsWith('image/')) throw new Error('A foto precisa ser uma imagem.');
+  const ext = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg';
+  const path = `${userId}/perfil/foto.${ext}`;
+  const up = await supabase.storage.from('condominios').upload(path, file, {
+    upsert: true,
+    contentType: file.type || undefined,
+  });
+  if (up.error) throw up.error;
+  const rpc = await supabase.rpc('salvar_foto_usuario', {
+    p_usuario_id: userId,
+    p_foto_path: path,
+  });
+  if (rpc.error) {
+    const { error } = await supabase.from('usuarios').update({ foto_path: path }).eq('id', userId);
+    if (error) throw rpc.error;
+  }
+  return path;
+}
+
+export async function criarConviteConstrutora({ construtoraId, email, escopoCondominioIds }) {
+  if (!construtoraId) throw new Error('Construtora inválida.');
+  const { data, error } = await supabase.rpc('criar_convite_construtora', {
+    p_construtora_id: construtoraId,
+    p_email: email || null,
+    p_escopo_condominio_ids: escopoCondominioIds?.length ? escopoCondominioIds : null,
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function listarConvitesConstrutora(construtoraId) {
+  if (!construtoraId) return [];
+  const { data, error } = await supabase.rpc('listar_convites_construtora', {
+    p_construtora_id: construtoraId,
+  });
+  if (error) throw error;
+  return Array.isArray(data) ? data : [];
+}
+
+export async function criarConviteGestaoTecnica(email) {
+  const { data, error } = await supabase.rpc('criar_convite_gestao_tecnica', {
+    p_email: email || null,
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function listarConvitesGestaoTecnica() {
+  const { data, error } = await supabase.rpc('listar_convites_gestao_tecnica');
+  if (error) throw error;
+  return Array.isArray(data) ? data : [];
+}
+
+export async function listarCondominiosDaConstrutora(construtoraId) {
+  if (!construtoraId) return [];
+  const { data, error } = await supabase
+    .from('condominios')
+    .select('id, nome')
+    .eq('construtora_id', construtoraId)
+    .order('nome');
+  if (error) throw error;
+  return data || [];
+}
+
+export async function salvarEscopoUsuarioConstrutora({ usuarioId, construtoraId, escopoCondominioIds }) {
+  if (!usuarioId) throw new Error('Usuário inválido.');
+  if (!construtoraId) throw new Error('Construtora inválida.');
+  const { error } = await supabase.rpc('aplicar_escopo_construtora', {
+    p_usuario_id: usuarioId,
+    p_construtora_id: construtoraId,
+    p_ids: escopoCondominioIds?.length ? escopoCondominioIds : null,
+  });
+  if (error) throw error;
+}
+
 export async function criarChamado({ condominioId, userId, titulo, descricao, files }) {
   const { data, error } = await supabase.rpc('abrir_chamado', {
     p_condominio_id: condominioId,
@@ -412,6 +774,7 @@ export async function criarChamado({ condominioId, userId, titulo, descricao, fi
   const chamado = typeof data === 'string' ? JSON.parse(data) : data;
   if (!chamado?.id) throw new Error('Não foi possível abrir o chamado.');
 
+  const uploaded = [];
   for (const file of files || []) {
     const arquivo = await uploadArquivo({
       condominioId,
@@ -420,6 +783,25 @@ export async function criarChamado({ condominioId, userId, titulo, descricao, fi
       folder: `chamados/${chamado.id}`,
     });
     await supabase.from('chamado_arquivos').insert({ chamado_id: chamado.id, arquivo_id: arquivo.id });
+    uploaded.push(arquivo);
+  }
+
+  if (uploaded.length) {
+    try {
+      const convId = await garantirChatChamado(chamado.id, userId);
+      const { data: msg } = await supabase.from('mensagens').insert({
+        conversa_id: convId,
+        usuario_id: userId,
+        texto: 'Imagem',
+      }).select('id').single();
+      if (msg?.id) {
+        await supabase.from('mensagem_arquivos').insert(
+          uploaded.map((arquivo) => ({ mensagem_id: msg.id, arquivo_id: arquivo.id })),
+        );
+      }
+    } catch {
+      /* a foto continua em chamado_arquivos e entra no chat na leitura */
+    }
   }
 
   return chamado;
@@ -435,6 +817,12 @@ function rpcAusente(error) {
   const code = error?.code || '';
   const msg = String(error?.message || '');
   return code === 'PGRST202' || /schema cache|could not find the function/i.test(msg);
+}
+
+function rpcEstruturaIncompativel(error) {
+  const code = String(error?.code || '');
+  const msg = String(error?.message || '');
+  return code === '42804' || /structure of query does not match/i.test(msg);
 }
 
 function ignoraDuplicado(error) {
@@ -550,6 +938,57 @@ export async function enviarMensagemChamado(chamadoId, texto, userId) {
   return data;
 }
 
+export async function mapaUltimasMensagensChamados(chamadoIds) {
+  const ids = [...new Set((chamadoIds || []).filter(Boolean))];
+  const map = {};
+  if (!ids.length) return map;
+
+  const convs = [];
+  for (let i = 0; i < ids.length; i += 80) {
+    const { data } = await supabase
+      .from('conversas')
+      .select('id, chamado_id')
+      .in('chamado_id', ids.slice(i, i + 80));
+    convs.push(...(data || []));
+  }
+  const convToChamado = Object.fromEntries(convs.map((row) => [row.id, row.chamado_id]));
+  const convIds = convs.map((row) => row.id);
+  if (!convIds.length) return map;
+
+  const msgs = [];
+  for (let i = 0; i < convIds.length; i += 80) {
+    const { data } = await supabase
+      .from('mensagens')
+      .select('conversa_id, texto, created_at, excluido_em')
+      .in('conversa_id', convIds.slice(i, i + 80))
+      .order('created_at', { ascending: false });
+    msgs.push(...(data || []));
+  }
+
+  for (const m of msgs) {
+    if (m.excluido_em) continue;
+    const chamadoId = convToChamado[m.conversa_id];
+    if (!chamadoId || map[chamadoId]) continue;
+    const preview = previewTextoChat(m.texto);
+    if (!preview) continue;
+    map[chamadoId] = preview;
+  }
+  return map;
+}
+
+export async function carregarEventosChatChamado(chamadoId) {
+  if (!chamadoId) return { historico: [], visitas: [] };
+  const [hist, visitas] = await Promise.all([
+    supabase
+      .from('chamado_status_historico')
+      .select('id, status_anterior, status_novo, created_at')
+      .eq('chamado_id', chamadoId)
+      .order('created_at'),
+    listarAgendamentosVisitaChamado(chamadoId),
+  ]);
+  return { historico: hist.data || [], visitas: visitas || [] };
+}
+
 export function arquivoEhImagem(arquivo) {
   const tipo = String(arquivo?.tipo || '').toLowerCase();
   const mime = String(arquivo?.mime_type || '').toLowerCase();
@@ -655,12 +1094,12 @@ export async function enviarArquivoChamado({ chamadoId, condominioId, userId, fi
   return { ...msg, anexos: [await resolverUrlArquivo(arquivo)] };
 }
 
-export async function criarLaudo({ condominioId, userId, chamadoId, titulo, descricao, files }) {
+export async function criarLaudo({ condominioId, userId, chamadoId, titulo, descricao, files, criticidade }) {
   if (!chamadoId) throw new Error('Selecione o chamado relacionado a este laudo.');
 
   const { data: chamado, error: chErr } = await supabase
     .from('chamados')
-    .select('id, condominio_id, titulo, numero_registro')
+    .select('id, condominio_id, titulo, numero_registro, unidades(identificacao, bloco, andar)')
     .eq('id', chamadoId)
     .single();
   if (chErr) throw chErr;
@@ -668,17 +1107,35 @@ export async function criarLaudo({ condominioId, userId, chamadoId, titulo, desc
     throw new Error('O chamado precisa ser deste condomínio.');
   }
 
-  const { data: laudo, error } = await supabase
+  const unidade = labelUnidade(chamado.unidades);
+  const tituloFinal = String(titulo || '').trim()
+    || [unidade, chamado.numero_registro != null ? `ID: ${chamado.numero_registro}` : '']
+      .filter(Boolean)
+      .join(' · ')
+    || chamado.titulo
+    || 'Laudo técnico';
+  const grau = String(criticidade || 'media').toLowerCase();
+
+  const payload = {
+    condominio_id: condominioId,
+    chamado_id: chamadoId,
+    criado_por: userId,
+    titulo: tituloFinal,
+    descricao,
+    criticidade: grau,
+  };
+
+  let { data: laudo, error } = await supabase
     .from('laudos_tecnicos')
-    .insert({
-      condominio_id: condominioId,
-      chamado_id: chamadoId,
-      criado_por: userId,
-      titulo,
-      descricao,
-    })
+    .insert(payload)
     .select('*')
     .single();
+  if (error && /criticidade/i.test(error.message || '')) {
+    delete payload.criticidade;
+    const retry = await supabase.from('laudos_tecnicos').insert(payload).select('*').single();
+    laudo = retry.data;
+    error = retry.error;
+  }
   if (error) throw error;
 
   const { error: convErr } = await supabase
@@ -686,12 +1143,20 @@ export async function criarLaudo({ condominioId, userId, chamadoId, titulo, desc
     .insert({
       condominio_id: condominioId,
       tipo: 'laudo',
-      titulo,
+      titulo: tituloFinal,
       laudo_id: laudo.id,
       chamado_id: chamadoId,
     });
   if (convErr && !ignoraDuplicado(convErr)) throw convErr;
 
+  let convId = null;
+  try {
+    convId = await garantirChatLaudo(laudo.id, userId);
+  } catch {
+    convId = null;
+  }
+
+  const uploaded = [];
   for (const file of files || []) {
     const arquivo = await uploadArquivo({
       condominioId,
@@ -699,10 +1164,193 @@ export async function criarLaudo({ condominioId, userId, chamadoId, titulo, desc
       file,
       folder: `laudos/${laudo.id}`,
     });
-    await supabase.from('laudo_arquivos').insert({ laudo_id: laudo.id, arquivo_id: arquivo.id });
+    const { error: linkErr } = await supabase
+      .from('laudo_arquivos')
+      .insert({ laudo_id: laudo.id, arquivo_id: arquivo.id });
+    if (linkErr) throw linkErr;
+    uploaded.push(arquivo);
+  }
+
+  const abertura = String(descricao || '').trim();
+  if (convId && (uploaded.length || abertura)) {
+    const { data: msg, error: msgErr } = await supabase.from('mensagens').insert({
+      conversa_id: convId,
+      usuario_id: userId,
+      texto: abertura || (uploaded.length ? 'Imagem' : ''),
+    }).select('id').single();
+    if (msgErr) throw msgErr;
+    if (msg?.id && uploaded.length) {
+      const { error: marqErr } = await supabase.from('mensagem_arquivos').insert(
+        uploaded.map((arquivo) => ({ mensagem_id: msg.id, arquivo_id: arquivo.id })),
+      );
+      if (marqErr) throw marqErr;
+    }
   }
 
   return laudo;
+}
+
+export async function resumoOperacionalCondominio(condominioId) {
+  if (!condominioId) {
+    return { aberto: 0, andamento: 0, concluido: 0, total: 0, manutencoes: 0, laudos: 0 };
+  }
+  const rpc = await supabase.rpc('resumo_operacional_condominio', { p_condominio_id: condominioId });
+  if (!rpc.error && rpc.data) {
+    const row = Array.isArray(rpc.data) ? rpc.data[0] : rpc.data;
+    return {
+      aberto: Number(row?.aberto || 0),
+      andamento: Number(row?.andamento || 0),
+      concluido: Number(row?.concluido || 0),
+      total: Number(row?.total || 0),
+      manutencoes: Number(row?.manutencoes || 0),
+      laudos: Number(row?.laudos || 0),
+    };
+  }
+  return null;
+}
+
+function mapLaudoGovernanca(row) {
+  if (!row) return null;
+  const chamado = embedOne(row.chamados) || (row.chamado_id
+    ? {
+      id: row.chamado_id,
+      numero_registro: row.chamado_numero,
+      titulo: row.chamado_titulo,
+    }
+    : null);
+  const unidades = embedOne(row.unidades)
+    || embedOne(chamado?.unidades)
+    || (row.unidade_identificacao || row.unidade_bloco || row.unidade_andar
+      ? {
+        identificacao: row.unidade_identificacao,
+        bloco: row.unidade_bloco,
+        andar: row.unidade_andar,
+      }
+      : null);
+  const capa = row.capa || (row.capa_storage_path
+    ? {
+      storage_path: row.capa_storage_path,
+      mime_type: row.capa_mime,
+      nome_original: row.capa_nome,
+      tipo: row.capa_tipo,
+    }
+    : null);
+  return {
+    ...row,
+    chamados: chamado ? { ...chamado, unidades: embedOne(chamado.unidades) || unidades } : chamado,
+    unidades,
+    capa,
+    usuarios: embedOne(row.usuarios) || { nome: row.criador_nome || '' },
+  };
+}
+
+async function hidratarCapasLaudos(rows) {
+  const list = (rows || []).map(mapLaudoGovernanca);
+  const semCapa = list.filter((row) => !row.capa?.storage_path && row.id);
+  if (semCapa.length) {
+    const { data } = await supabase
+      .from('laudo_arquivos')
+      .select('laudo_id, arquivos(*)')
+      .in('laudo_id', semCapa.map((row) => row.id));
+    const primeiro = {};
+    for (const row of data || []) {
+      if (primeiro[row.laudo_id]) continue;
+      const arquivo = embedOne(row.arquivos);
+      if (arquivo) primeiro[row.laudo_id] = arquivo;
+    }
+    for (const row of list) {
+      if (!row.capa?.storage_path && primeiro[row.id]) row.capa = primeiro[row.id];
+    }
+  }
+  return Promise.all(list.map(async (row) => {
+    if (!row.capa?.storage_path) return row;
+    return { ...row, capa: await resolverUrlArquivo(row.capa) };
+  }));
+}
+
+async function listarLaudosDireto(condominioId) {
+  const full = await supabase
+    .from('laudos_tecnicos')
+    .select('*, chamados(id, numero_registro, titulo, unidades(identificacao, bloco, andar)), usuarios:criado_por(nome)')
+    .eq('condominio_id', condominioId)
+    .order('created_at', { ascending: false });
+  if (!full.error) return hidratarCapasLaudos(full.data || []);
+
+  const plain = await supabase
+    .from('laudos_tecnicos')
+    .select('*')
+    .eq('condominio_id', condominioId)
+    .order('created_at', { ascending: false });
+  if (plain.error) throw plain.error;
+  return hidratarCapasLaudos(plain.data || []);
+}
+
+async function carregarLaudoDireto(laudoId) {
+  const full = await supabase
+    .from('laudos_tecnicos')
+    .select('*, chamados(id, numero_registro, titulo, unidades(identificacao, bloco, andar)), usuarios:criado_por(nome)')
+    .eq('id', laudoId)
+    .single();
+  if (!full.error) {
+    const [row] = await hidratarCapasLaudos([full.data]);
+    return row;
+  }
+
+  const plain = await supabase
+    .from('laudos_tecnicos')
+    .select('*')
+    .eq('id', laudoId)
+    .single();
+  if (plain.error) throw plain.error;
+  const [row] = await hidratarCapasLaudos([plain.data]);
+  return row;
+}
+
+export async function listarLaudosGovernanca(condominioId) {
+  if (!condominioId) return [];
+  const rpc = await supabase.rpc('listar_laudos_governanca', { p_condominio_id: condominioId });
+  if (!rpc.error && rpc.data) return hidratarCapasLaudos(rpc.data || []);
+  if (rpc.error && !rpcAusente(rpc.error) && !rpcEstruturaIncompativel(rpc.error)) throw rpc.error;
+  return listarLaudosDireto(condominioId);
+}
+
+export async function carregarLaudoGovernanca(laudoId) {
+  if (!laudoId) return null;
+  const rpc = await supabase.rpc('laudo_governanca', { p_laudo_id: laudoId });
+  if (!rpc.error && rpc.data) {
+    const row = Array.isArray(rpc.data) ? rpc.data[0] : rpc.data;
+    if (row) {
+      const [mapped] = await hidratarCapasLaudos([row]);
+      return mapped;
+    }
+  }
+  if (rpc.error && !rpcAusente(rpc.error) && !rpcEstruturaIncompativel(rpc.error)) throw rpc.error;
+  return carregarLaudoDireto(laudoId);
+}
+
+export async function listarLaudosGlobais() {
+  let { data, error } = await supabase
+    .from('laudos_tecnicos')
+    .select('*, chamados(id, numero_registro, titulo, unidades(identificacao, bloco, andar)), usuarios:criado_por(nome), condominios(id, nome)')
+    .order('created_at', { ascending: false });
+  if (error) {
+    const plain = await supabase
+      .from('laudos_tecnicos')
+      .select('*, chamados(id, numero_registro, titulo, unidades(identificacao, bloco, andar)), usuarios:criado_por(nome)')
+      .order('created_at', { ascending: false });
+    data = plain.data;
+    error = plain.error;
+  }
+  if (error) throw error;
+  return hidratarCapasLaudos(data || []);
+}
+
+export async function atualizarCriticidadeLaudo(laudoId, criticidade) {
+  const { error } = await supabase
+    .from('laudos_tecnicos')
+    .update({ criticidade: String(criticidade || 'media').toLowerCase() })
+    .eq('id', laudoId);
+  if (error) throw error;
 }
 
 export async function garantirChatLaudo(laudoId, userId) {
@@ -817,6 +1465,22 @@ export async function criarLoginSemTrocarSessao({ email, password, nome, convite
   return data;
 }
 
+export async function criarUsuarioGestaoTecnica({ email, password, nome }) {
+  const { data, error } = await supabase.rpc('criar_usuario_gestao_tecnica', {
+    p_email: String(email || '').trim().toLowerCase(),
+    p_senha: password,
+    p_nome: nome || null,
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function listarUsuariosGestaoTecnica() {
+  const { data, error } = await supabase.rpc('listar_usuarios_gestao_tecnica');
+  if (error) throw error;
+  return data || [];
+}
+
 export async function vincularUsuario({ condominioId, cargo, usuarioId, email, unidadeTexto, nome }) {
   const { data, error } = await supabase.rpc('vincular_usuario_ao_condominio', {
     p_condominio_id: condominioId,
@@ -846,11 +1510,7 @@ export async function vincularUsuario({ condominioId, cargo, usuarioId, email, u
 }
 
 function formatUnidadeLabel(u) {
-  if (!u) return '';
-  const id = (u.identificacao || '').trim();
-  const bloco = (u.bloco || '').trim();
-  if (bloco && id) return `${bloco} · ${id}`;
-  return id || bloco || '';
+  return labelUnidade(u, '');
 }
 
 /** Lista usuários do condomínio com nome e unidade (para gestão). */
@@ -969,6 +1629,148 @@ export async function listarUsuariosCondominio(condominioId) {
   return mapped;
 }
 
+function nomeFraco(nome) {
+  const n = String(nome || '').trim();
+  if (!n) return true;
+  if (/^(morador|equipe|usu[aá]rio)(\s*\d+)?$/i.test(n)) return true;
+  return false;
+}
+
+function nomePreenchido(nome) {
+  return !nomeFraco(nome);
+}
+
+/** Resolve nomes reais (perfil + Auth) quando o embed `usuarios.nome` vem vazio por RLS. */
+export async function mapNomesUsuarios(ids, condominioIds) {
+  const unique = [...new Set((ids || []).filter(Boolean))];
+  const map = {};
+  if (!unique.length) return map;
+
+  const rpc = await supabase.rpc('nomes_exibicao_usuarios', { p_ids: unique });
+  if (!rpc.error && Array.isArray(rpc.data)) {
+    for (const row of rpc.data) {
+      const id = row.usuario_id || row.id;
+      const nome = String(row.nome || '').trim();
+      if (id && nome) map[id] = nome;
+    }
+  }
+
+  let missing = unique.filter((id) => !map[id]);
+  const condos = (Array.isArray(condominioIds) ? condominioIds : [condominioIds]).filter(Boolean);
+  if (missing.length && condos.length) {
+    await Promise.all(condos.map(async (cid) => {
+      try {
+        const users = await listarUsuariosCondominio(cid);
+        for (const u of users || []) {
+          const id = u.usuario_id || u.usuarios?.id;
+          const nome = String(u.nome || u.usuarios?.nome || '').trim();
+          if (id && nome) map[id] = nome;
+        }
+      } catch {
+        /* listar exige staff/GT */
+      }
+    }));
+    missing = unique.filter((id) => !map[id]);
+  }
+
+  if (missing.length) {
+    const { data } = await supabase.from('usuarios').select('id, nome, email').in('id', missing);
+    for (const u of data || []) {
+      const nome = String(u.nome || '').trim();
+      if (nome) map[u.id] = nome;
+    }
+  }
+  return map;
+}
+
+export async function hidratarNomesChamados(chamados) {
+  const list = (chamados || []).map((row) => ({
+    ...row,
+    usuarios: embedOne(row.usuarios),
+    unidades: embedOne(row.unidades),
+  }));
+  if (!list.length) return list;
+
+  const missing = [...new Set(
+    list
+      .filter((row) => row.solicitante_id && !nomePreenchido(row.usuarios?.nome))
+      .map((row) => row.solicitante_id),
+  )];
+  if (!missing.length) return list;
+
+  const condoIds = [...new Set(
+    list
+      .filter((row) => missing.includes(row.solicitante_id) && row.condominio_id)
+      .map((row) => row.condominio_id),
+  )];
+  const map = await mapNomesUsuarios(missing, condoIds);
+  return list.map((row) => {
+    const nome = map[row.solicitante_id];
+    if (!nome) return row;
+    return {
+      ...row,
+      usuarios: { ...(row.usuarios || {}), id: row.solicitante_id, nome },
+    };
+  });
+}
+
+export async function hidratarNomesMensagens(mensagens, {
+  solicitanteId,
+  solicitanteNome,
+  condominioId,
+} = {}) {
+  const list = (mensagens || []).map((m) => ({
+    ...m,
+    usuarios: embedOne(m.usuarios),
+  }));
+  const ids = [...new Set([
+    solicitanteId,
+    ...list.map((m) => m.usuario_id),
+  ].filter(Boolean))];
+  const map = await mapNomesUsuarios(ids, condominioId);
+  if (solicitanteId && nomePreenchido(solicitanteNome) && !map[solicitanteId]) {
+    map[solicitanteId] = String(solicitanteNome).trim();
+  }
+  return {
+    nomes: map,
+    mensagens: list.map((m) => {
+      const nome = map[m.usuario_id]
+        || m.usuarios?.nome
+        || (m.usuario_id === solicitanteId ? map[solicitanteId] || solicitanteNome : '')
+        || '';
+      return { ...m, usuarios: { ...(m.usuarios || {}), nome } };
+    }),
+  };
+}
+
+export async function hidratarFotosMensagens(mensagens) {
+  const list = mensagens || [];
+  const ids = [...new Set(list.map((m) => m.usuario_id).filter(Boolean))];
+  if (!ids.length) return list;
+  let rows = [];
+  const full = await supabase.from('usuarios').select('id, foto_path, gestao_tecnica').in('id', ids);
+  if (!full.error) {
+    rows = full.data || [];
+  } else {
+    const plain = await supabase.from('usuarios').select('id, foto_path').in('id', ids);
+    rows = plain.data || [];
+  }
+  const fotos = {};
+  const flags = {};
+  await Promise.all((rows || []).map(async (row) => {
+    flags[row.id] = Boolean(row.gestao_tecnica);
+    if (row.foto_path) fotos[row.id] = await urlFotoUsuario(row.foto_path);
+  }));
+  return list.map((m) => ({
+    ...m,
+    usuarios: {
+      ...(m.usuarios || {}),
+      foto_url: fotos[m.usuario_id] || m.usuarios?.foto_url || '',
+      gestao_tecnica: flags[m.usuario_id] ?? m.usuarios?.gestao_tecnica,
+    },
+  }));
+}
+
 export async function criarConvite({ condominioId, cargo, email, unidadeTexto }) {
   const { data, error } = await supabase.rpc('criar_convite', {
     p_condominio_id: condominioId,
@@ -1031,6 +1833,107 @@ export async function listarArquivosAberturaChamado(chamadoId) {
     const ar = Array.isArray(row.arquivos) ? row.arquivos[0] : row.arquivos;
     return ar;
   }).filter(Boolean);
+}
+
+export async function juntarMensagensComAbertura(chamado, mensagens) {
+  const list = mensagens || [];
+  if (!chamado?.id) return list;
+  let arquivos = [];
+  try {
+    arquivos = await listarArquivosAberturaChamado(chamado.id);
+  } catch {
+    return list;
+  }
+  const withUrl = (await Promise.all((arquivos || []).map(resolverUrlArquivo))).filter((file) => file?.id);
+  if (!withUrl.length) return list;
+
+  const aberturaIds = new Set(withUrl.map((file) => file.id));
+  const marked = list.map((m) => {
+    const anexos = m.anexos || [];
+    const ids = anexos.map((a) => a.id).filter(Boolean);
+    const ehAbertura = ids.length > 0 && ids.every((id) => aberturaIds.has(id));
+    return ehAbertura ? { ...m, abertura: true } : m;
+  });
+
+  const seen = new Set();
+  for (const m of marked) {
+    for (const a of m.anexos || []) {
+      if (a?.id) seen.add(a.id);
+      if (a?.storage_path) seen.add(a.storage_path);
+    }
+  }
+  const extras = withUrl.filter((file) => !seen.has(file.id) && !seen.has(file.storage_path));
+  if (!extras.length) return marked;
+
+  return [
+    {
+      id: `abertura-${chamado.id}`,
+      usuario_id: chamado.solicitante_id,
+      usuarios: embedOne(chamado.usuarios) || null,
+      texto: '',
+      created_at: chamado.created_at,
+      anexos: extras,
+      abertura: true,
+      excluido_em: null,
+    },
+    ...marked,
+  ];
+}
+
+export async function listarArquivosAberturaLaudo(laudoId) {
+  const { data, error } = await supabase
+    .from('laudo_arquivos')
+    .select('arquivo_id, arquivos(*)')
+    .eq('laudo_id', laudoId);
+  if (error) throw error;
+  return (data || []).map((row) => embedOne(row.arquivos)).filter(Boolean);
+}
+
+export async function juntarMensagensComAberturaLaudo(laudo, mensagens) {
+  const list = mensagens || [];
+  if (!laudo?.id) return list;
+
+  let arquivos = [];
+  try {
+    arquivos = await listarArquivosAberturaLaudo(laudo.id);
+  } catch {
+    arquivos = [];
+  }
+  const withUrl = (await Promise.all((arquivos || []).map(resolverUrlArquivo))).filter((file) => file?.id);
+  const descricao = String(laudo.descricao || '').trim();
+
+  const aberturaIds = new Set(withUrl.map((file) => file.id));
+  const marked = list.map((m) => {
+    const anexos = m.anexos || [];
+    const ids = anexos.map((a) => a.id).filter(Boolean);
+    const ehAbertura = ids.length > 0 && ids.every((id) => aberturaIds.has(id));
+    return ehAbertura ? { ...m, abertura: true } : m;
+  });
+
+  const seen = new Set();
+  for (const m of marked) {
+    for (const a of m.anexos || []) {
+      if (a?.id) seen.add(a.id);
+      if (a?.storage_path) seen.add(a.storage_path);
+    }
+  }
+  const extras = withUrl.filter((file) => !seen.has(file.id) && !seen.has(file.storage_path));
+  const descricaoJaNoChat = Boolean(descricao) && marked.some((m) => String(m.texto || '').trim() === descricao);
+  if (!extras.length && (!descricao || descricaoJaNoChat)) return marked;
+
+  return [
+    {
+      id: `abertura-laudo-${laudo.id}`,
+      usuario_id: laudo.criado_por,
+      usuarios: embedOne(laudo.usuarios) || { nome: laudo.criador_nome || '' },
+      texto: descricaoJaNoChat ? '' : descricao,
+      created_at: laudo.created_at,
+      anexos: extras,
+      abertura: true,
+      excluido_em: null,
+    },
+    ...marked,
+  ];
 }
 
 export async function listarRastreabilidadeChamado(chamadoId) {
@@ -1145,8 +2048,6 @@ export async function agendarVisitaChamado({ chamadoId, condominioId, userId, da
     if (!/check|tipo|inspecao_agendada|violates/i.test(msg)) throw err;
     await registrarRastreabilidadeChamado({ ...payload, tipo: 'atendimento' });
   }
-
-  await enviarMensagemChamado(chamadoId, descricao, userId);
 }
 
 export async function listarVisitasAgendadas(condoId) {
@@ -1207,7 +2108,7 @@ export async function periodoPadraoChamados(condoId) {
 export async function listarChamadosCondominio(condoId) {
   const full = await supabase
     .from('chamados')
-    .select('*, usuarios:solicitante_id(nome), unidades(id, identificacao), locais(id, nome)')
+    .select('*, usuarios:solicitante_id(nome), unidades(id, identificacao, bloco, andar), locais(id, nome)')
     .eq('condominio_id', condoId)
     .order('created_at', { ascending: true });
   if (!full.error) return full.data || [];
@@ -1216,7 +2117,7 @@ export async function listarChamadosCondominio(condoId) {
   }
   const fallback = await supabase
     .from('chamados')
-    .select('*, usuarios:solicitante_id(nome), unidades(id, identificacao)')
+    .select('*, usuarios:solicitante_id(nome), unidades(id, identificacao, bloco, andar)')
     .eq('condominio_id', condoId)
     .order('created_at', { ascending: true });
   if (fallback.error) throw fallback.error;

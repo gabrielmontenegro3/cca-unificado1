@@ -30,6 +30,19 @@ export function BoletinsPage() {
   async function add(e, publicado) {
     e.preventDefault();
     if (!editable) return;
+    const payload = {
+      p_condominio_id: condoId,
+      p_titulo: form.titulo,
+      p_subtitulo: form.subtitulo || null,
+      p_texto: form.texto,
+      p_publicado: publicado,
+    };
+    const rpc = await supabase.rpc('criar_boletim', payload);
+    if (!rpc.error) {
+      setForm({ titulo: '', subtitulo: '', texto: '' });
+      load();
+      return;
+    }
     const { error: err } = await supabase.from('boletins_informativos').insert({
       condominio_id: condoId,
       autor_id: session.user.id,
@@ -39,8 +52,12 @@ export function BoletinsPage() {
       publicado,
       data_publicacao: publicado ? new Date().toISOString() : null,
     });
-    if (err) setError(err.message);
-    else {
+    if (err) {
+      const missingRpc = /could not find the function|schema cache|does not exist/i.test(rpc.error?.message || '');
+      setError(missingRpc
+        ? 'Rode o arquivo supabase/boletins-rls-fix.sql no SQL Editor do Supabase e tente de novo.'
+        : err.message);
+    } else {
       setForm({ titulo: '', subtitulo: '', texto: '' });
       load();
     }
@@ -73,12 +90,15 @@ export function BoletinsPage() {
         rows={rows}
         empty="Nenhum boletim."
         getTitle={(row) => row.titulo}
-        getSubtitle={(row) => [
-          row.subtitulo,
-          row.usuarios?.nome,
-          formatDate(row.data_publicacao || row.created_at),
-          editable ? (row.publicado ? 'Publicado' : 'Rascunho') : null,
-        ].filter(Boolean).join(' · ')}
+        getSubtitle={(row) => [row.subtitulo, row.usuarios?.nome].filter(Boolean).join(' · ')}
+        getTags={(row) => [
+          row.data_publicacao || row.created_at
+            ? { key: 'data', icon: 'calendar', label: formatDate(row.data_publicacao || row.created_at) }
+            : null,
+          editable
+            ? { key: 'status', icon: row.publicado ? 'check' : 'file', label: row.publicado ? 'Publicado' : 'Rascunho' }
+            : null,
+        ]}
         onSelect={setSelected}
       />
       {editable ? (

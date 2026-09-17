@@ -31,11 +31,26 @@ export function statusUi(value) {
   return STATUS_UI.find((item) => item.match.includes(value)) || STATUS_UI[0];
 }
 
+export const CRITICIDADE_LAUDO = [
+  { id: 'baixa', label: 'Baixa' },
+  { id: 'media', label: 'Média' },
+  { id: 'alta', label: 'Alta' },
+  { id: 'critica', label: 'Crítica' },
+];
+
+export const CRITICIDADE_LABEL = {
+  baixa: 'Baixa',
+  media: 'Média',
+  alta: 'Alta',
+  critica: 'Crítica',
+};
+
 export const CARGO_LABEL = {
   administrador: 'Administrador',
+  admin_sistema: 'Administrador do sistema',
   gestao_tecnica: 'Gestão Técnica',
   construtora: 'Construtora',
-  administracao: 'Administração',
+  administracao: 'Administração do condomínio',
   morador: 'Morador',
 };
 
@@ -47,6 +62,11 @@ export const TIPO_LOCAL = {
   garagem: 'Garagem',
   area_tecnica: 'Área técnica',
   outro: 'Outro',
+};
+
+export const AREA_LOCAL = {
+  privativa: 'Área privativa',
+  comum: 'Área comum',
 };
 
 export const PERIODICIDADE = {
@@ -72,6 +92,38 @@ export function isGestao(tipo) {
   return GESTAO.has(String(tipo || '').toLowerCase().trim());
 }
 
+export const UNIDADE_AREAS_COMUNS = 'Áreas comuns';
+export const ORIGEM_ADMINISTRACAO = 'administracao';
+
+export function ehCargoAdministracao(tipo) {
+  return String(tipo || '').toLowerCase().trim() === 'administracao';
+}
+
+export function ehCargoConstrutora(tipo) {
+  return String(tipo || '').toLowerCase().trim() === 'construtora';
+}
+
+export function nomeUnidadeNormalizado(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function ehUnidadeAreasComuns(value) {
+  const raw = typeof value === 'string' ? value : (value?.identificacao || '');
+  const n = nomeUnidadeNormalizado(raw);
+  return n === 'areas comuns' || n === 'area comum';
+}
+
+export function ehChamadoAdministracao(row) {
+  if (!row) return false;
+  if (String(row.origem || '').toLowerCase() === ORIGEM_ADMINISTRACAO) return true;
+  return ehUnidadeAreasComuns(row.unidades || row.unidade);
+}
+
 export function can(tipo, action) {
   const t = String(tipo || '').toLowerCase().trim();
   const map = {
@@ -87,8 +139,9 @@ export function can(tipo, action) {
     view_laudos: t !== 'morador',
     chat_laudo: t === 'gestao_tecnica' || t === 'construtora',
     view_all_tickets: isStaff(t),
-    create_ticket: t === 'morador',
-    view_maintenance: isStaff(t) || isGestao(t),
+    create_ticket: t === 'morador' || t === 'administracao',
+    view_maintenance: isStaff(t) || isGestao(t) || t === 'construtora',
+    view_chamado_numeros: isStaff(t) || t === 'construtora',
     manage_boletins: t === 'administrador' || t === 'gestao_tecnica',
   };
   return Boolean(map[action]);
@@ -99,7 +152,33 @@ export function navFor(tipo) {
 }
 
 export function navGroupsFor(tipo) {
-  const isGT = String(tipo || '').toLowerCase().trim() === 'gestao_tecnica';
+  const t = String(tipo || '').toLowerCase().trim();
+  const isGT = t === 'gestao_tecnica';
+  const isMorador = t === 'morador';
+  const isAdminCondo = t === 'administracao';
+  const isConstrutora = t === 'construtora';
+
+  if (isConstrutora) {
+    return [
+      {
+        id: 'governanca',
+        label: 'Governança',
+        icon: 'clipboard',
+        items: [
+          { to: '/governanca-tecnica', label: 'Governança técnica', icon: 'clipboard' },
+        ],
+      },
+      {
+        id: 'operacao',
+        label: 'Operação',
+        icon: 'home',
+        items: [
+          { to: '/visao-geral', label: 'Números dos chamados', icon: 'home' },
+          { to: '/manutencao', label: 'Manutenções', icon: 'wrench' },
+        ],
+      },
+    ];
+  }
   const groups = [
     {
       id: 'empreendimento',
@@ -107,7 +186,8 @@ export function navGroupsFor(tipo) {
       icon: 'building',
       items: [
         { to: '/visao-geral', label: 'Visão geral', icon: 'home' },
-        { to: '/empreendimento', label: 'Empreendimento', icon: 'building' },
+        ...(isMorador ? [{ to: '/assistencia-tecnica', label: 'Assistência técnica', icon: 'headset' }] : []),
+        ...(isAdminCondo ? [{ to: '/chamados', label: 'Chamados', icon: 'headset' }] : []),
         { to: '/documentos', label: 'Documentos', icon: 'folder' },
         { to: '/boletins', label: 'Boletins informativos', icon: 'newspaper' },
       ],
@@ -122,7 +202,7 @@ export function navGroupsFor(tipo) {
         ...(isGT ? [{ to: '/rastreabilidade', label: 'Rastreabilidade', icon: 'layers' }] : []),
         ...(isGT ? [{ to: '/agendar-visita', label: 'Agendar visita', icon: 'calendar' }] : []),
         ...(isGT ? [{ to: '/relatorio', label: 'Relatório', icon: 'file' }] : []),
-        ...(isGT ? [{ to: '/laudos', label: 'Laudos técnicos', icon: 'clipboard' }] : []),
+        ...(isGT ? [{ to: '/governanca-tecnica', label: 'Governança técnica', icon: 'clipboard' }] : []),
       ],
     },
     {

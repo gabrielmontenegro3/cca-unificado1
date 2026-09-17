@@ -71,6 +71,87 @@ export function mensagemChatVisita(dataYmd, horario) {
   return `Visita agendada para ${dataLabel}.`;
 }
 
+export function textoEhVisitaAgendada(texto) {
+  return /(inspe[cç][aã]o|visita) agendada/i.test(String(texto || '').trim());
+}
+
+export function previewTextoChat(texto) {
+  const raw = String(texto || '').trim();
+  if (!raw || textoEhVisitaAgendada(raw)) return '';
+  if (/^arquivo:\s*/i.test(raw) || /^imagem$/i.test(raw)) return 'Foto';
+  return raw.replace(/\s+/g, ' ');
+}
+
+export function montarLinhaDoTempoChat({ mensagens = [], historico = [], visitas = [] } = {}) {
+  const items = [];
+  const visitaMsgs = [];
+
+  for (const m of mensagens || []) {
+    if (m?.excluido_em) continue;
+    const hasFiles = (m.anexos || []).length > 0;
+    if (textoEhVisitaAgendada(m.texto) && !hasFiles) {
+      visitaMsgs.push(m);
+      continue;
+    }
+    items.push({ kind: 'msg', id: `msg-${m.id}`, at: m.created_at, mensagem: m });
+  }
+
+  for (const h of historico || []) {
+    items.push({
+      kind: 'status',
+      id: `status-${h.id}`,
+      at: h.created_at,
+      de: h.status_anterior,
+      para: h.status_novo,
+    });
+  }
+
+  const visitasLista = [...(visitas || [])];
+  if (!visitasLista.length) {
+    const re = /(inspe[cç][aã]o|visita) agendada para (\d{1,2}\/\d{1,2}\/\d{4})(?: às (\d{1,2}:\d{2}))?/i;
+    for (const mensagem of visitaMsgs) {
+      const match = String(mensagem.texto || '').match(re);
+      if (match) {
+        const [dia, mes, ano] = match[2].split('/');
+        const ymd = `${ano}-${String(mes).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
+        const hora = match[3] || '';
+        visitasLista.push({
+          id: `msg-${mensagem.id}`,
+          tipo: TIPO_INSPECAO_AGENDADA,
+          titulo: tituloInspecaoAgendada(ymd, hora),
+          descricao: String(mensagem.texto || '').trim(),
+          data_ocorrencia: isoAgendamento(ymd, hora),
+          created_at: mensagem.created_at,
+        });
+      } else {
+        visitasLista.push({
+          id: `msg-${mensagem.id}`,
+          descricao: mensagem.texto,
+          created_at: mensagem.created_at,
+          data_ocorrencia: mensagem.created_at,
+        });
+      }
+    }
+  }
+
+  for (const v of visitasLista) {
+    if (!v) continue;
+    items.push({
+      kind: 'visita',
+      id: `visita-${v.id}`,
+      at: v.created_at || v.data_ocorrencia,
+      visita: v,
+    });
+  }
+
+  return items.sort((a, b) => {
+    const ta = new Date(a.at).getTime();
+    const tb = new Date(b.at).getTime();
+    if (ta !== tb) return ta - tb;
+    return String(a.id).localeCompare(String(b.id));
+  });
+}
+
 export function isoAgendamento(dataYmd, horario) {
   const ymd = String(dataYmd || '').slice(0, 10);
   const hora = formatHorarioHm(horario);

@@ -7,7 +7,7 @@ import { criarConvite, criarLoginSemTrocarSessao, listarConvites, listarUsuarios
 import { copiarTexto } from '../lib/parseSeed';
 import { conviteUrl } from '../lib/branding';
 import { formatDateTime } from '../lib/format';
-import { Alert, Btn, Empty, Field, Page } from '../components/ui';
+import { Alert, Btn, Empty, Field, MaskedInput, Page } from '../components/ui';
 import { EditTelaButton, useEditTela } from '../components/EditTela';
 import { DetailFields, Modal } from '../components/DataList';
 
@@ -493,7 +493,14 @@ export function PerfilPage() {
       <Alert error={error} ok={ok} />
       <form className="panel stack" onSubmit={save}>
         <Field label="Nome"><input value={form.nome} onChange={(e) => setForm({ ...form, nome: e.target.value })} required /></Field>
-        <Field label="Telefone"><input value={form.telefone} onChange={(e) => setForm({ ...form, telefone: e.target.value })} /></Field>
+        <Field label="Telefone">
+          <MaskedInput
+            mask="telefone"
+            value={form.telefone}
+            onChange={(telefone) => setForm({ ...form, telefone })}
+            placeholder="(11) 90000-0000"
+          />
+        </Field>
         <p className="muted">{session.user.email}</p>
         <Btn type="submit" icon="check">Salvar</Btn>
       </form>

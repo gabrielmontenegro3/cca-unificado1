@@ -1,3 +1,5 @@
+import { areaForLocal } from './localIcon.js';
+
 function norm(value) {
   return String(value || '')
     .toLowerCase()
@@ -58,7 +60,7 @@ export const PADROES = {
   catalogo: '[fornecedor] | [material] | [local] | [garantia]',
   fornecedores: '[nome] | [cnpj] | [vendedor] | [tel vendedor] | [telefone1] | [telefone2] | [localizacao]',
   materiais: '[nome]',
-  locais: '[nome] | [descricao]',
+  locais: '[nome] | [descricao] | [privativa|comum]',
   garantias: '[nome] | [tempo] | [dias|meses|anos] | [data final AAAA-MM-DD] | [perda da garantia] | [descricao] | [telefone]',
   contatos: '[nome] | [telefone] | [email] | [subtitulo]',
   usuarios: '[nome] | [email] | [cargo]',
@@ -180,9 +182,92 @@ export async function copiarTexto(text) {
   area.remove();
 }
 
+export function nomeEmpresaKey(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+function nomeEmpresaValido(value) {
+  const nome = String(value || '').trim();
+  if (!nome || isPlaceholder(nome)) return false;
+  if (/^fornecedor$/i.test(nome)) return false;
+  return true;
+}
+
+export function uniqueFornecedores(rows = [], linhasBase = []) {
+  const map = new Map();
+  for (const row of rows) {
+    if (!nomeEmpresaValido(row?.nome)) continue;
+    const key = nomeEmpresaKey(row.nome);
+    if (!key || map.has(key)) {
+      if (key && map.has(key)) {
+        const prev = map.get(key);
+        if (!prev.razao_social && row.razao_social) prev.razao_social = row.razao_social;
+        if (!prev.nome_fantasia && row.nome_fantasia) prev.nome_fantasia = row.nome_fantasia;
+        if (!prev.cnpj && row.cnpj) prev.cnpj = row.cnpj;
+        if (!prev.contato && row.contato) prev.contato = row.contato;
+        if (!prev.telefone && row.telefone) prev.telefone = row.telefone;
+        if (!prev.telefone1 && row.telefone1) prev.telefone1 = row.telefone1;
+        if (!prev.telefone2 && row.telefone2) prev.telefone2 = row.telefone2;
+        if (!prev.localizacao && row.localizacao) prev.localizacao = row.localizacao;
+      }
+      continue;
+    }
+    map.set(key, {
+      key,
+      nome: String(row.nome).trim(),
+      razao_social: row.razao_social || '',
+      nome_fantasia: row.nome_fantasia || String(row.nome).trim(),
+      cnpj: row.cnpj || '',
+      contato: row.contato || '',
+      telefone: row.telefone || '',
+      telefone1: row.telefone1 || '',
+      telefone2: row.telefone2 || '',
+      localizacao: row.localizacao || '',
+    });
+  }
+  for (const linha of linhasBase) {
+    if (!nomeEmpresaValido(linha?.fornecedor)) continue;
+    const key = nomeEmpresaKey(linha.fornecedor);
+    if (!key || map.has(key)) continue;
+    map.set(key, {
+      key,
+      nome: String(linha.fornecedor).trim(),
+      razao_social: '',
+      nome_fantasia: String(linha.fornecedor).trim(),
+      cnpj: '',
+      contato: '',
+      telefone: '',
+      telefone1: '',
+      telefone2: '',
+      localizacao: '',
+    });
+  }
+  return [...map.values()];
+}
+
+export function uniqueFornecedoresFromForm(form) {
+  return uniqueFornecedores(
+    parseNamedList(form?.fornecedores_texto, [
+      'nome', 'cnpj', 'contato', 'telefone', 'telefone1', 'telefone2', 'localizacao',
+    ]),
+    parseCatalogoLinhas(form?.catalogo_texto),
+  );
+}
+
 export function buildCondoSeed(form) {
   const fromConfig = form?.unidade_config ? gerarUnidadesDoConfig(form.unidade_config) : [];
   const fromText = parseNamedList(form.unidades_texto, ['identificacao', 'bloco', 'andar']);
+  const linhasBase = parseCatalogoLinhas(form.catalogo_texto);
+  const fornecedores = uniqueFornecedores(
+    parseNamedList(form.fornecedores_texto, [
+      'nome', 'cnpj', 'contato', 'telefone', 'telefone1', 'telefone2', 'localizacao',
+    ]),
+    linhasBase,
+  );
   return {
     visao_geral: (form.visao_geral || '').trim(),
     sobre_empreendimento: (form.sobre_empreendimento || '').trim(),
@@ -191,12 +276,13 @@ export function buildCondoSeed(form) {
     boletim_titulo: (form.boletim_titulo || '').trim(),
     boletim_texto: (form.boletim_texto || '').trim(),
     email: (form.email || '').trim(),
-    linhas_base: parseCatalogoLinhas(form.catalogo_texto),
-    fornecedores: parseNamedList(form.fornecedores_texto, [
-      'nome', 'cnpj', 'contato', 'telefone', 'telefone1', 'telefone2', 'localizacao',
-    ]),
+    linhas_base: linhasBase,
+    fornecedores,
     materiais: parseNamedList(form.materiais_texto, ['nome']),
-    locais: parseNamedList(form.locais_texto, ['nome', 'descricao']),
+    locais: parseNamedList(form.locais_texto, ['nome', 'descricao', 'area']).map((row) => ({
+      ...row,
+      area: areaForLocal(row.nome, row.descricao, row.area),
+    })),
     garantias: parseNamedList(form.garantias_texto, [
       'nome', 'prazo_valor', 'prazo_unidade', 'data_fim', 'motivos_perda_garantia', 'descricao', 'telefone',
     ]),
@@ -219,6 +305,9 @@ export function validarCriacaoCondominio(form) {
   const errors = [];
   const nome = String(form?.nome || '').trim();
   if (nome.length < 2) errors.push('Informe o nome do condomínio (mínimo 2 caracteres).');
+  if (!String(form?.construtora_id || '').trim()) {
+    errors.push('Selecione a construtora deste condomínio.');
+  }
 
   const email = String(form?.email || '').trim();
   if (email && !emailOk(email)) errors.push('E-mail do condomínio inválido.');
@@ -291,6 +380,7 @@ export function resumoCriacaoCondominio(form) {
 
   return {
     nome: String(form?.nome || '').trim(),
+    construtora: String(form?.construtora_nome || '').trim(),
     cidade: [form?.cidade, form?.estado].filter(Boolean).join('/'),
     fornecedores: seed.fornecedores.length,
     materiais: seed.materiais.length,

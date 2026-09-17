@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useSession } from '../lib/session';
 import { uploadArquivo, publicOrSignedUrl } from '../lib/api';
-import { formatDate } from '../lib/format';
-import { Alert, Btn, Empty, Field, Page } from '../components/ui';
+import { formatDate, formatTelefone } from '../lib/format';
+import { Alert, Btn, Empty, Field, MaskedInput, Page } from '../components/ui';
 import { Icon } from '../components/icons';
 import { EditTelaButton, useEditTela } from '../components/EditTela';
 import { DataList, DetailFields, Modal } from '../components/DataList';
@@ -121,21 +121,14 @@ export function DocumentosPage() {
   return (
     <Page
       title="Documentos"
+      search={{
+        value: q,
+        onChange: setQ,
+        placeholder: 'Procurar documento…',
+      }}
       actions={showEditButton ? <EditTelaButton editing={editing} onToggle={toggleEditing} /> : null}
     >
       <Alert error={error} />
-
-      <div className="docs-toolbar">
-        <label className="docs-search">
-          <Icon name="search" size={16} />
-          <input
-            placeholder="Pesquisar documentos…"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-          />
-        </label>
-        <span className="docs-count">{filtered.length} documento(s)</span>
-      </div>
 
       {!filtered.length ? (
         <Empty text={q ? 'Nenhum documento encontrado.' : 'Nenhum documento enviado ainda.'} />
@@ -247,7 +240,11 @@ export function ContatosPage() {
         rows={ativos}
         empty="Nenhum contato."
         getTitle={(row) => row.nome}
-        getSubtitle={(row) => [row.subtitulo, row.telefone, row.email].filter(Boolean).join(' · ')}
+        getSubtitle={(row) => row.subtitulo || ''}
+        getTags={(row) => [
+          row.telefone ? { key: 'tel', icon: 'phone', label: formatTelefone(row.telefone) || row.telefone } : null,
+          row.email ? { key: 'mail', icon: 'mail', label: row.email } : null,
+        ]}
         onSelect={setSelected}
       />
       {editable ? (
@@ -255,7 +252,13 @@ export function ContatosPage() {
           <h2>Novo contato</h2>
           <Field label="Nome"><input value={form.nome} onChange={(e) => setForm({ ...form, nome: e.target.value })} required /></Field>
           <Field label="Subtítulo"><input value={form.subtitulo} onChange={(e) => setForm({ ...form, subtitulo: e.target.value })} /></Field>
-          <Field label="Telefone"><input value={form.telefone} onChange={(e) => setForm({ ...form, telefone: e.target.value })} /></Field>
+          <Field label="Telefone">
+            <MaskedInput
+              mask="telefone"
+              value={form.telefone}
+              onChange={(telefone) => setForm({ ...form, telefone })}
+            />
+          </Field>
           <Field label="E-mail"><input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
           <Btn type="submit" icon="check">Salvar</Btn>
         </form>
@@ -270,7 +273,7 @@ export function ContatosPage() {
           fields={[
             { label: 'Nome', value: selected?.nome },
             { label: 'Subtítulo', value: selected?.subtitulo || '—' },
-            { label: 'Telefone', value: selected?.telefone || '—' },
+            { label: 'Telefone', value: selected?.telefone ? (formatTelefone(selected.telefone) || selected.telefone) : '—' },
             { label: 'E-mail', value: selected?.email || '—' },
           ]}
         />

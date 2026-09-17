@@ -147,7 +147,7 @@ export async function destinoNotificacao(row, { selectCondo, navigate, isGestaoT
     if (condo) selectCondo(condo);
 
     if (laudoId) {
-      navigate(isGestaoTecnica ? `/laudos-globais/${laudoId}` : `/laudos/${laudoId}`);
+      navigate(isGestaoTecnica ? `/laudos-globais/${laudoId}` : `/governanca-tecnica/${laudoId}`);
       return;
     }
     if (chamadoId) {

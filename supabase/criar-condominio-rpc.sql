@@ -118,12 +118,13 @@ BEGIN
     RAISE EXCEPTION 'Informe o nome do condomínio';
   END IF;
 
-  INSERT INTO public.condominios (nome, cnpj, descricao, email)
+  INSERT INTO public.condominios (nome, cnpj, descricao, email, construtora_id)
   VALUES (
     trim(p_nome),
     NULLIF(trim(COALESCE(p_cnpj, '')), ''),
     NULLIF(trim(COALESCE(p_descricao, '')), ''),
-    NULLIF(trim(COALESCE(p_seed->>'email', '')), '')
+    NULLIF(trim(COALESCE(p_seed->>'email', '')), ''),
+    NULLIF(trim(COALESCE(p_seed->>'construtora_id', '')), '')::uuid
   )
   RETURNING id INTO v_condo;
 
@@ -211,7 +212,7 @@ BEGIN
   FOR v_item IN SELECT value FROM jsonb_array_elements(COALESCE(p_seed->'locais', '[]'::jsonb))
   LOOP
     IF NULLIF(trim(COALESCE(v_item->>'nome', '')), '') IS NULL THEN CONTINUE; END IF;
-    INSERT INTO public.locais (condominio_id, nome, tipo, bloco, descricao)
+    INSERT INTO public.locais (condominio_id, nome, tipo, bloco, descricao, area)
     VALUES (
       v_condo, trim(v_item->>'nome'),
       CASE lower(COALESCE(NULLIF(trim(v_item->>'tipo'), ''), 'outro'))
@@ -223,7 +224,13 @@ BEGIN
         WHEN 'area_tecnica' THEN 'area_tecnica'
         ELSE 'outro'
       END,
-      NULLIF(v_item->>'bloco', ''), NULLIF(v_item->>'descricao', '')
+      NULLIF(v_item->>'bloco', ''), NULLIF(v_item->>'descricao', ''),
+      CASE
+        WHEN lower(COALESCE(NULLIF(trim(v_item->>'area'), ''), '')) IN ('privativa', 'area_privativa', 'área privativa') THEN 'privativa'
+        WHEN lower(COALESCE(NULLIF(trim(v_item->>'area'), ''), '')) IN ('comum', 'area_comum', 'área comum') THEN 'comum'
+        WHEN lower(COALESCE(NULLIF(trim(v_item->>'tipo'), ''), '')) = 'unidade' THEN 'privativa'
+        ELSE 'comum'
+      END
     );
   END LOOP;
 
@@ -240,6 +247,14 @@ BEGIN
     INSERT INTO public.unidades (condominio_id, identificacao, bloco, andar)
     VALUES (v_condo, trim(v_item->>'identificacao'), NULLIF(v_item->>'bloco', ''), NULLIF(v_item->>'andar', ''));
   END LOOP;
+
+  INSERT INTO public.unidades (condominio_id, identificacao)
+  SELECT v_condo, 'Áreas comuns'
+  WHERE NOT EXISTS (
+    SELECT 1 FROM public.unidades u
+    WHERE u.condominio_id = v_condo
+      AND lower(trim(u.identificacao)) IN ('áreas comuns', 'areas comuns')
+  );
 
   FOR v_item IN SELECT value FROM jsonb_array_elements(COALESCE(p_seed->'contatos', '[]'::jsonb))
   LOOP
@@ -278,7 +293,7 @@ BEGIN
     IF v_nome IS NOT NULL THEN
       SELECT id INTO v_loc FROM public.locais WHERE condominio_id = v_condo AND lower(nome) = lower(v_nome) LIMIT 1;
       IF v_loc IS NULL THEN
-        INSERT INTO public.locais (condominio_id, nome, tipo) VALUES (v_condo, v_nome, 'outro') RETURNING id INTO v_loc;
+        INSERT INTO public.locais (condominio_id, nome, tipo, area) VALUES (v_condo, v_nome, 'outro', 'comum') RETURNING id INTO v_loc;
       END IF;
     END IF;
     v_nome := NULLIF(trim(COALESCE(v_item->>'garantia', '')), '');

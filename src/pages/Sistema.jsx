@@ -111,7 +111,7 @@ export function OnboardingPreferencias() {
 }
 
 export function ConfiguracoesPage() {
-  const { isGestaoTecnica, condoId } = useSession();
+  const { isGestaoTecnica, isConstrutoraOrg, condoId } = useSession();
   const editor = usePreferenciasEditor();
 
   const body = (
@@ -133,7 +133,7 @@ export function ConfiguracoesPage() {
     </Page>
   );
 
-  if (isGestaoTecnica && !condoId) {
+  if ((isGestaoTecnica || isConstrutoraOrg) && !condoId) {
     return (
       <div className="portal">
         <GestaoBar />
@@ -146,7 +146,7 @@ export function ConfiguracoesPage() {
 }
 
 export function NotificacoesPage() {
-  const { condoId, selectCondo, isGestaoTecnica } = useSession();
+  const { condoId, selectCondo, isGestaoTecnica, isConstrutoraOrg } = useSession();
   const navigate = useNavigate();
   const [rows, setRows] = useState([]);
   const [error, setError] = useState('');
@@ -203,7 +203,7 @@ export function NotificacoesPage() {
       {!rows.length ? (
         <Empty text="Nenhuma notificação ainda." />
       ) : (
-        <ul className="data-list notif-list">
+        <ul className="data-list data-list--rich notif-list">
           {rows.map((row) => (
             <li key={row.id}>
               <button
@@ -229,7 +229,7 @@ export function NotificacoesPage() {
     </Page>
   );
 
-  if (isGestaoTecnica && !condoId) {
+  if ((isGestaoTecnica || isConstrutoraOrg) && !condoId) {
     return (
       <div className="portal">
         <GestaoBar />

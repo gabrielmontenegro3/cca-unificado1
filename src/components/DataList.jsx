@@ -6,6 +6,13 @@ function labelize(key) {
   return String(key || '').replaceAll('_', ' ');
 }
 
+export function listInitials(nome, fallback = '?') {
+  const parts = String(nome || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return fallback;
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+}
+
 export function Modal({ open, title, onClose, children, footer, className = '' }) {
   useEffect(() => {
     if (!open) return undefined;
@@ -69,6 +76,9 @@ export function DataList({
   getKey = (row) => row.id,
   getTitle,
   getSubtitle,
+  getLeading,
+  getTags,
+  className = '',
   interactive = true,
 }) {
   if (!rows.length) return <Empty text={empty} />;
@@ -76,7 +86,7 @@ export function DataList({
   const clickable = interactive && typeof onSelect === 'function';
 
   return (
-    <ul className={`data-list${clickable ? '' : ' data-list--static'}`}>
+    <ul className={['data-list', 'data-list--rich', clickable ? '' : 'data-list--static', className].filter(Boolean).join(' ')}>
       {rows.map((row) => {
         const title = getTitle
           ? getTitle(row)
@@ -84,11 +94,24 @@ export function DataList({
         const subtitle = getSubtitle
           ? getSubtitle(row)
           : columns.slice(1).map((col) => formatCell(row, col)).filter(Boolean).join(' · ');
+        const tags = typeof getTags === 'function' ? (getTags(row) || []).filter(Boolean) : [];
+        const leading = typeof getLeading === 'function' ? getLeading(row) : null;
         const body = (
           <>
+            {leading ? <span className="data-list-leading" aria-hidden="true">{leading}</span> : null}
             <span className="data-list-main">
               <strong>{title || '—'}</strong>
               {subtitle ? <span className="data-list-sub">{subtitle}</span> : null}
+              {tags.length ? (
+                <span className="data-list-tags">
+                  {tags.map((tag) => (
+                    <span key={tag.key || tag.label} className="data-list-tag">
+                      {tag.icon ? <Icon name={tag.icon} size={12} /> : null}
+                      {tag.label}
+                    </span>
+                  ))}
+                </span>
+              ) : null}
             </span>
             {clickable ? <Icon name="chevron" size={16} className="data-list-chevron" /> : null}
           </>

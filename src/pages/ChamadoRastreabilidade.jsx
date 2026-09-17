@@ -2,10 +2,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useSession } from '../lib/session';
-import { can, STATUS_CHAMADO, STATUS_LABEL } from '../lib/permissions';
+import { can, ehChamadoAdministracao, STATUS_CHAMADO, STATUS_LABEL } from '../lib/permissions';
 import {
   chamadoNumero,
   formatDateTime,
+  labelUnidade,
 } from '../lib/format';
 import {
   listarArquivosAberturaChamado,
@@ -24,7 +25,7 @@ import {
   tituloRastreabilidade,
 } from '../lib/chamadoRastreabilidade';
 import { exportarRelatorioChamado } from '../lib/chamadoRelatorio';
-import { Alert, Badge, Btn, Empty, Field, Page } from '../components/ui';
+import { Alert, Badge, Btn, ChamadoAdminBanner, ChamadoAdminTag, Empty, Field, Page } from '../components/ui';
 import { Icon } from '../components/icons';
 import { Modal } from '../components/DataList';
 
@@ -293,7 +294,7 @@ export function RastreabilidadeListaPage() {
     if (!condoId || !podeAcessar) return;
     supabase
       .from('chamados')
-      .select('*, usuarios:solicitante_id(nome), unidades(identificacao)')
+      .select('*, usuarios:solicitante_id(nome), unidades(identificacao, bloco, andar)')
       .eq('condominio_id', condoId)
       .order('created_at', { ascending: false })
       .then(({ data, error: err }) => {
@@ -329,25 +330,30 @@ export function RastreabilidadeListaPage() {
         <Empty text="Nenhum chamado encontrado." />
       ) : (
         <div className="ticket-list">
-          {filtered.map((row) => (
+          {filtered.map((row) => {
+            const daAdmin = ehChamadoAdministracao(row);
+            return (
             <Link
-              className="ticket-card"
+              className={`ticket-card${daAdmin ? ' ticket-card--admin' : ''}`}
               key={row.id}
               to={`/rastreabilidade/${row.id}`}
             >
               <div className="ticket-card-top">
-                <strong>{chamadoNumero(row.numero_registro)}</strong>
-                <Badge value={row.status} />
+                <strong className="ticket-card-title">{row.titulo}</strong>
+                <span className="ticket-card-tags">
+                  {daAdmin ? <ChamadoAdminTag /> : null}
+                  <Badge value={row.status} />
+                </span>
               </div>
-              <span className="ticket-card-title">{row.titulo}</span>
               <small>
-                {row.unidades?.identificacao || 'Unidade'}
+                {labelUnidade(row.unidades, 'Unidade')}
                 {row.usuarios?.nome ? ` · ${row.usuarios.nome}` : ''}
                 {' · '}
                 {formatDateTime(row.updated_at)}
               </small>
             </Link>
-          ))}
+            );
+          })}
         </div>
       )}
     </Page>
@@ -380,7 +386,7 @@ export function ChamadoRastreabilidadePage() {
   async function load() {
     const { data, error: err } = await supabase
       .from('chamados')
-      .select('*, usuarios:solicitante_id(nome), unidades(identificacao)')
+      .select('*, usuarios:solicitante_id(nome), unidades(identificacao, bloco, andar)')
       .eq('id', id)
       .single();
     if (err) return setError(err.message);
@@ -504,15 +510,18 @@ export function ChamadoRastreabilidadePage() {
     >
       <Alert error={error} />
 
+      {ehChamadoAdministracao(chamado) ? <ChamadoAdminBanner /> : null}
+
       <section className="trace-summary panel">
         <div className="trace-summary-grid">
           <div>
             <span className="label">Solicitante</span>
             <strong>{chamado.usuarios?.nome || '—'}</strong>
+            {ehChamadoAdministracao(chamado) ? <ChamadoAdminTag /> : null}
           </div>
           <div>
             <span className="label">Unidade</span>
-            <strong>{chamado.unidades?.identificacao || '—'}</strong>
+            <strong>{labelUnidade(chamado.unidades, '—')}</strong>
           </div>
           <div>
             <span className="label">Abertura</span>

@@ -2,19 +2,18 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useSession } from '../lib/session';
-import { STATUS_CHAMADO, STATUS_LABEL } from '../lib/permissions';
-import { chamadoNumero, formatChatTime, formatDateTime } from '../lib/format';
-import { enviarMensagemChamado, garantirChatChamado, anexarArquivosNasMensagens, enviarArquivoChamado } from '../lib/api';
+import { STATUS_CHAMADO, STATUS_LABEL, ehChamadoAdministracao } from '../lib/permissions';
+import { chamadoNumero, formatDateTime, formatTelefone, labelUnidade, nomePessoa, nomeSolicitanteChamado, rotuloSolicitanteUnidade } from '../lib/format';
+import { enviarMensagemChamado, garantirChatChamado, anexarArquivosNasMensagens, enviarArquivoChamado, juntarMensagensComAbertura, hidratarNomesChamados, hidratarNomesMensagens, mapNomesUsuarios, mapaUltimasMensagensChamados, carregarEventosChatChamado } from '../lib/api';
 import {
   classeListaConversa,
   mapaLeituraConversas,
   marcarConversaLidaPorChamado,
-  mensagemEhNova,
 } from '../lib/notifications';
-import { Alert, Badge, Btn, Empty } from '../components/ui';
+import { Alert, Badge, Btn, ChamadoAdminBanner, ChamadoAdminTag, Empty } from '../components/ui';
 import { Icon } from '../components/icons';
 import { GestaoBar } from '../components/GestaoBar';
-import { ChatComposer, ChatHeader, ChatMensagem } from '../components/Chat';
+import { ChatComposer, ChatHeader, ChatLog } from '../components/Chat';
 import { StatusPicker } from '../components/StatusPicker';
 import { UnreadOrb } from '../components/UnreadOrb';
 import { Modal } from '../components/DataList';
@@ -42,6 +41,9 @@ export function SuportePage() {
   const [ocorrencias, setOcorrencias] = useState([]);
   const [perfilBusy, setPerfilBusy] = useState(false);
   const [visitaModal, setVisitaModal] = useState(false);
+  const [historico, setHistorico] = useState([]);
+  const [visitas, setVisitas] = useState([]);
+  const [previews, setPreviews] = useState({});
   const chatLogRef = useRef(null);
 
   const condos = useMemo(() => {
@@ -55,21 +57,26 @@ export function SuportePage() {
   async function loadLista() {
     let { data, error: err } = await supabase
       .from('chamados')
-      .select('*, usuarios:solicitante_id(nome), unidades(identificacao), condominios(id, nome)')
+      .select('*, usuarios:solicitante_id(nome), unidades(identificacao, bloco, andar), condominios(id, nome)')
       .order('updated_at', { ascending: false });
     if (err) {
       const plain = await supabase
         .from('chamados')
-        .select('*, usuarios:solicitante_id(nome), unidades(identificacao)')
+        .select('*, usuarios:solicitante_id(nome), unidades(identificacao, bloco, andar)')
         .order('updated_at', { ascending: false });
       data = plain.data;
       err = plain.error;
     }
     if (err) setError(err.message);
-    setRows(data || []);
+    const hydrated = await hidratarNomesChamados(data || []);
+    setRows(hydrated);
     try {
-      const map = await mapaLeituraConversas();
+      const [map, last] = await Promise.all([
+        mapaLeituraConversas(),
+        mapaUltimasMensagensChamados(hydrated.map((row) => row.id)),
+      ]);
       setLeitura(map.byChamado || {});
+      setPreviews(last || {});
     } catch {
       setLeitura({});
     }
@@ -79,21 +86,29 @@ export function SuportePage() {
     if (!chamadoId) {
       setChamado(null);
       setMensagens([]);
+      setHistorico([]);
+      setVisitas([]);
       setLidaAte(null);
       return;
     }
     const { data, error: err } = await supabase
       .from('chamados')
-      .select('*, usuarios:solicitante_id(id, nome, email, telefone), unidades(identificacao), condominios(id, nome)')
+      .select('*, usuarios:solicitante_id(id, nome, email, telefone), unidades(identificacao, bloco, andar), condominios(id, nome)')
       .eq('id', chamadoId)
       .single();
     if (err) {
       setError(err.message);
       setChamado(null);
       setMensagens([]);
+      setHistorico([]);
+      setVisitas([]);
       return;
     }
-    setChamado(data);
+    const [ticket] = await hidratarNomesChamados([data]);
+    setChamado(ticket);
+    const eventos = await carregarEventosChatChamado(chamadoId);
+    setHistorico(eventos.historico);
+    setVisitas(eventos.visitas);
     try {
       const convId = await garantirChatChamado(chamadoId, session.user.id);
       const part = await supabase
@@ -106,10 +121,22 @@ export function SuportePage() {
       setLidaAte(ate);
       const msgs = await supabase
         .from('mensagens')
-        .select('*, usuarios(nome)')
+        .select('*, usuarios:usuario_id(nome)')
         .eq('conversa_id', convId)
         .order('created_at');
-      setMensagens(await anexarArquivosNasMensagens(msgs.data || []));
+      const joined = await juntarMensagensComAbertura(ticket, await anexarArquivosNasMensagens(msgs.data || []));
+      const named = await hidratarNomesMensagens(joined, {
+        solicitanteId: ticket.solicitante_id,
+        solicitanteNome: ticket.usuarios?.nome,
+        condominioId: ticket.condominio_id,
+      });
+      if (named.nomes[ticket.solicitante_id]) {
+        setChamado({
+          ...ticket,
+          usuarios: { ...(ticket.usuarios || {}), nome: named.nomes[ticket.solicitante_id] },
+        });
+      }
+      setMensagens(named.mensagens);
       await marcarConversaLidaPorChamado(chamadoId);
       const map = await mapaLeituraConversas();
       setLeitura(map.byChamado || {});
@@ -118,10 +145,16 @@ export function SuportePage() {
       if (conv.data?.id) {
         const msgs = await supabase
           .from('mensagens')
-          .select('*, usuarios(nome)')
+          .select('*, usuarios:usuario_id(nome)')
           .eq('conversa_id', conv.data.id)
           .order('created_at');
-        setMensagens(await anexarArquivosNasMensagens(msgs.data || []));
+        const joined = await juntarMensagensComAbertura(ticket, await anexarArquivosNasMensagens(msgs.data || []));
+        const named = await hidratarNomesMensagens(joined, {
+          solicitanteId: ticket.solicitante_id,
+          solicitanteNome: ticket.usuarios?.nome,
+          condominioId: ticket.condominio_id,
+        });
+        setMensagens(named.mensagens);
         await marcarConversaLidaPorChamado(chamadoId);
       } else {
         setMensagens([]);
@@ -154,10 +187,10 @@ export function SuportePage() {
     go();
     const t = setTimeout(go, 250);
     return () => clearTimeout(t);
-  }, [mensagens]);
+  }, [mensagens, historico, visitas]);
 
   const filtrados = rows.filter((row) => {
-    const text = `${row.titulo} ${row.numero_registro} ${row.usuarios?.nome || ''} ${row.condominios?.nome || ''}`.toLowerCase();
+    const text = `${row.titulo} ${row.numero_registro} ${nomePessoa(row.usuarios)} ${row.condominios?.nome || ''} ${labelUnidade(row.unidades)} ${previews[row.id] || ''}`.toLowerCase();
     const estado = leitura[row.id]?.estado || 'lida';
     const unreadOk = !soNaoLidas || estado === 'nova' || estado === 'nao_lida';
     return (!condoFiltro || row.condominio_id === condoFiltro)
@@ -191,6 +224,7 @@ export function SuportePage() {
       const condoId = chamado.condominio_id;
 
       let user = chamado.usuarios || null;
+      const nomes = await mapNomesUsuarios([userId], condoId);
       const { data } = await supabase
         .from('usuarios')
         .select('id, nome, email, telefone, ativo')
@@ -200,32 +234,33 @@ export function SuportePage() {
         user = {
           ...user,
           ...data,
-          nome: data.nome || user?.nome,
+          nome: nomes[userId] || data.nome || user?.nome,
           email: data.email || user?.email,
           telefone: data.telefone || user?.telefone,
         };
+      } else if (nomes[userId]) {
+        user = { ...user, nome: nomes[userId] };
       }
-      // Fallback: nome já exibido no chat
       if (!user?.nome && chamado.usuarios?.nome) {
         user = { ...user, nome: chamado.usuarios.nome };
       }
 
-      let unidade = chamado.unidades?.identificacao || '';
+      let unidade = labelUnidade(chamado.unidades);
       if (!unidade) {
         const { data: moradias } = await supabase
           .from('unidade_moradores')
-          .select('unidades(identificacao, condominio_id)')
+          .select('unidades(identificacao, bloco, andar, condominio_id)')
           .eq('usuario_id', userId);
         unidade = (moradias || [])
           .filter((row) => !condoId || row.unidades?.condominio_id === condoId)
-          .map((row) => row.unidades?.identificacao)
+          .map((row) => labelUnidade(row.unidades))
           .filter(Boolean)
           .join(' · ');
       }
 
       const { data: hist } = await supabase
         .from('chamados')
-        .select('id, numero_registro, titulo, status, created_at, updated_at, unidades(identificacao)')
+        .select('id, numero_registro, titulo, status, created_at, updated_at, unidades(identificacao, bloco, andar)')
         .eq('solicitante_id', userId)
         .eq('condominio_id', condoId)
         .order('created_at', { ascending: false })
@@ -331,11 +366,12 @@ export function SuportePage() {
                 {grupo.items.map((row) => {
                   const estado = leitura[row.id]?.estado || 'lida';
                   const unread = estado === 'nova' || estado === 'nao_lida';
+                  const daAdmin = ehChamadoAdministracao(row);
                   return (
                   <button
                     type="button"
                     key={row.id}
-                    className={`suporte-item${row.id === id ? ' active' : ''} ${classeListaConversa(estado)}`.trim()}
+                    className={`suporte-item${daAdmin ? ' suporte-item--admin' : ''}${row.id === id ? ' active' : ''} ${classeListaConversa(estado)}`.trim()}
                     onClick={() => navigate(`/suporte/${row.id}`)}
                   >
                     {unread ? (
@@ -347,16 +383,16 @@ export function SuportePage() {
                       />
                     ) : null}
                     <div className="suporte-item-top">
-                      <strong>{chamadoNumero(row.numero_registro)}</strong>
-                      <Badge value={row.status} />
+                      <strong className="suporte-item-name">
+                        {rotuloSolicitanteUnidade(row, { administracao: daAdmin })}
+                      </strong>
+                      <span className="ticket-card-tags">
+                        {daAdmin ? <ChamadoAdminTag /> : null}
+                        <Badge value={row.status} />
+                      </span>
                     </div>
-                    <span>{row.titulo}</span>
-                    <small>
-                      {condoFiltro ? null : `${row.condominios?.nome || 'Condomínio'} · `}
-                      {row.usuarios?.nome || 'Morador'}
-                      {row.unidades?.identificacao ? ` · ${row.unidades.identificacao}` : ''}
-                      {' · '}
-                      {formatDateTime(row.updated_at)}
+                    <small className="suporte-item-preview">
+                      {previews[row.id] || 'Sem mensagens'}
                     </small>
                   </button>
                   );
@@ -372,7 +408,7 @@ export function SuportePage() {
               <>
                 <ChatHeader
                   title={chamado.titulo}
-                  subtitle={`${chamadoNumero(chamado.numero_registro)} · ${chamado.usuarios?.nome || 'Morador'}${chamado.unidades?.identificacao ? ` · ${chamado.unidades.identificacao}` : ''}`}
+                  subtitle={`${chamadoNumero(chamado.numero_registro)} · ${nomeSolicitanteChamado(chamado, { administracao: ehChamadoAdministracao(chamado) })}${labelUnidade(chamado.unidades) ? ` · ${labelUnidade(chamado.unidades)}` : ''}`}
                   onClick={abrirPerfilSolicitante}
                 >
                   <StatusPicker
@@ -424,17 +460,19 @@ export function SuportePage() {
                     Abrir no condomínio
                   </Btn>
                 </ChatHeader>
+                {ehChamadoAdministracao(chamado) ? <ChamadoAdminBanner /> : null}
                 <div className="chat-log" ref={chatLogRef}>
-                  {mensagens.filter((m) => !m.excluido_em).map((m) => (
-                    <ChatMensagem
-                      key={m.id}
-                      mensagem={m}
-                      mine={m.usuario_id === session.user.id}
-                      isNew={mensagemEhNova(m, session.user.id, lidaAte)}
-                      quando={formatChatTime(m.created_at)}
-                    />
-                  ))}
-                  {!mensagens.length ? <Empty text="Nenhuma mensagem ainda." /> : null}
+                  <ChatLog
+                    mensagens={mensagens}
+                    historico={historico}
+                    visitas={visitas}
+                    sessionUserId={session.user.id}
+                    lidaAte={lidaAte}
+                    solicitanteId={chamado.solicitante_id}
+                    solicitanteNome={nomePessoa(chamado.usuarios)}
+                    origemAdmin={ehChamadoAdministracao(chamado)}
+                    empty="Nenhuma mensagem ainda."
+                  />
                 </div>
                 <ChatComposer
                   value={texto}
@@ -470,8 +508,9 @@ export function SuportePage() {
             <dl className="suporte-perfil-fields">
               {[
                 { label: 'Nome', value: perfil?.nome },
+                { label: 'Origem', value: ehChamadoAdministracao(chamado) ? 'Administração do condomínio' : 'Morador' },
                 { label: 'E-mail', value: perfil?.email },
-                { label: 'Telefone', value: perfil?.telefone },
+                { label: 'Telefone', value: perfil?.telefone ? (formatTelefone(perfil.telefone) || perfil.telefone) : perfil?.telefone },
                 { label: 'Unidade', value: perfil?.unidade },
                 { label: 'Condomínio', value: perfil?.condominio },
               ].map((item) => (
@@ -512,7 +551,7 @@ export function SuportePage() {
                           </div>
                           <div className="suporte-ocorrencia-meta">
                             <span>{chamadoNumero(row.numero_registro)}</span>
-                            {row.unidades?.identificacao ? <span>Unidade {row.unidades.identificacao}</span> : null}
+                            {labelUnidade(row.unidades) ? <span>{labelUnidade(row.unidades)}</span> : null}
                             {row.created_at ? <span>{formatDateTime(row.created_at)}</span> : null}
                           </div>
                         </button>

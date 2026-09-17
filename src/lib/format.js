@@ -28,10 +28,40 @@ export function formatDate(value) {
   return date.toLocaleDateString('pt-BR');
 }
 
+function soDigitos(value, max) {
+  return String(value || '').replace(/\D/g, '').slice(0, max);
+}
+
 /** Mantém CNPJ só com dígitos (até 14). Aceita máscara na entrada. */
 export function normalizarCnpj(value) {
-  const digits = String(value || '').replace(/\D/g, '');
-  return digits ? digits.slice(0, 14) : null;
+  const digits = soDigitos(value, 14);
+  return digits || null;
+}
+
+/** Máscara 00.000.000/0000-00. */
+export function formatCnpj(value) {
+  const d = soDigitos(value, 14);
+  if (!d) return '';
+  const p1 = d.slice(0, 2);
+  const p2 = d.slice(2, 5);
+  const p3 = d.slice(5, 8);
+  const p4 = d.slice(8, 12);
+  const p5 = d.slice(12, 14);
+  if (d.length <= 2) return p1;
+  if (d.length <= 5) return `${p1}.${p2}`;
+  if (d.length <= 8) return `${p1}.${p2}.${p3}`;
+  if (d.length <= 12) return `${p1}.${p2}.${p3}/${p4}`;
+  return `${p1}.${p2}.${p3}/${p4}-${p5}`;
+}
+
+/** Máscara (11) 3000-0000 ou (11) 99000-0000. */
+export function formatTelefone(value) {
+  const d = soDigitos(value, 11);
+  if (!d) return '';
+  if (d.length <= 2) return `(${d}`;
+  if (d.length <= 6) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
+  if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+  return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
 }
 
 export function formatDateTime(value) {
@@ -56,8 +86,114 @@ export function chamadoNumero(n) {
   return `ID: ${n}`;
 }
 
+/** PostgREST às vezes devolve o embed como array. */
+export function embedOne(value) {
+  if (!value) return null;
+  return Array.isArray(value) ? (value[0] || null) : value;
+}
+
+export function nomePessoa(value, fallback = '') {
+  if (value == null || value === '') return fallback;
+  if (typeof value === 'string') return value.trim() || fallback;
+  return String(embedOne(value)?.nome || '').trim() || fallback;
+}
+
+export function nomeSolicitanteChamado(chamado, { administracao = false, fallback = 'Morador' } = {}) {
+  if (administracao) return 'Administração do condomínio';
+  return nomePessoa(chamado?.usuarios, fallback);
+}
+
+function limparParteUnidade(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function codigoUnidade(texto) {
+  return limparParteUnidade(texto)
+    .replace(/^(bloco|torre|casa|apt\.?o?|apartamento|unidade|andar)\s+/i, '')
+    .toLowerCase();
+}
+
+function comPrefixoUnidade(valor, prefixo) {
+  const raw = limparParteUnidade(valor);
+  if (!raw) return '';
+  const resto = raw.replace(/^(bloco|torre|casa|apt\.?o?|apartamento|unidade|andar)\s+/i, '');
+  if (/^bloco\b/i.test(raw)) return resto ? `Bloco ${resto}` : 'Bloco';
+  if (/^torre\b/i.test(raw)) return resto ? `Torre ${resto}` : 'Torre';
+  if (/^casa\b/i.test(raw)) return resto ? `Casa ${resto}` : 'Casa';
+  if (/^(apt\.?o?|apartamento)\b/i.test(raw)) return resto ? `Apt ${resto}` : 'Apt';
+  if (/^andar\b/i.test(raw)) return resto ? `Andar ${resto}` : 'Andar';
+  return `${prefixo} ${raw}`;
+}
+
+/** Ex.: "Casa 4 Bloco N", "Apt 101 Bloco A". */
+export function labelUnidade(unidade, fallback = '') {
+  if (unidade == null || unidade === '') return fallback;
+  if (typeof unidade === 'string') return labelUnidade({ identificacao: unidade }, fallback);
+  const u = embedOne(unidade);
+  if (!u) return fallback;
+
+  const identificacao = limparParteUnidade(u.identificacao || u.nome || '');
+  const blocoRaw = limparParteUnidade(u.bloco);
+  const andarRaw = limparParteUnidade(u.andar);
+
+  if (identificacao && /(bloco|torre)/i.test(identificacao) && /(casa|apt|apartamento)/i.test(identificacao)) {
+    return identificacao.replace(/\s*\/\s*/g, ' ');
+  }
+
+  let casa = '';
+  let bloco = '';
+
+  if (/^casa\b/i.test(identificacao)) {
+    casa = comPrefixoUnidade(identificacao, 'Casa');
+  } else if (/^(apt\.?o?|apartamento)\b/i.test(identificacao)) {
+    casa = comPrefixoUnidade(identificacao, 'Apt');
+  } else if (/^(bloco|torre)\b/i.test(identificacao) && !blocoRaw) {
+    bloco = comPrefixoUnidade(identificacao, /torre/i.test(identificacao) ? 'Torre' : 'Bloco');
+  } else if (identificacao) {
+    if (/^\d{3,}$/.test(identificacao)) casa = `Apt ${identificacao}`;
+    else if (/^[0-9A-Za-z-]+$/.test(identificacao)) casa = `Casa ${identificacao}`;
+    else casa = identificacao;
+  }
+
+  if (blocoRaw) {
+    bloco = comPrefixoUnidade(blocoRaw, /torre/i.test(blocoRaw) ? 'Torre' : 'Bloco');
+  }
+
+  if (casa && bloco && codigoUnidade(casa) === codigoUnidade(bloco)) {
+    bloco = '';
+  }
+
+  const andar = andarRaw && !/^0+$/.test(andarRaw)
+    ? comPrefixoUnidade(andarRaw, 'Andar')
+    : '';
+  const parts = [casa, bloco];
+  if (andar && codigoUnidade(andar) && !parts.some((p) => codigoUnidade(p) === codigoUnidade(andar))) {
+    parts.push(andar);
+  }
+  return parts.filter(Boolean).join(' ') || fallback;
+}
+
+export function rotuloSolicitanteUnidade(chamado, opts = {}) {
+  const nome = nomeSolicitanteChamado(chamado, opts);
+  const unidade = labelUnidade(chamado?.unidades);
+  return unidade ? `${nome} - ${unidade}` : nome;
+}
+
 export function laudoNumero(n) {
   return `Laudo #${n}`;
+}
+
+export function rotuloLaudoUnidade(laudo) {
+  return labelUnidade(
+    laudo?.unidades
+    || laudo?.chamados?.unidades
+    || {
+      identificacao: laudo?.unidade_identificacao,
+      bloco: laudo?.unidade_bloco,
+      andar: laudo?.unidade_andar,
+    },
+    'Unidade',
+  );
 }
 
 export function fileKind(mime) {
@@ -86,6 +222,7 @@ export function addPeriod(date, periodicidade, customDays) {
 }
 
 export function maintenanceTone(row) {
+  if (!row) return 'em_dia';
   if (!row.ativo) return 'inativa';
   if (!row.proxima_execucao) return 'em_dia';
   const today = new Date();

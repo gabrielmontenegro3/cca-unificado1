@@ -4,7 +4,9 @@
 ALTER TABLE public.fornecedores
   ADD COLUMN IF NOT EXISTS telefone1 text,
   ADD COLUMN IF NOT EXISTS telefone2 text,
-  ADD COLUMN IF NOT EXISTS localizacao text;
+  ADD COLUMN IF NOT EXISTS localizacao text,
+  ADD COLUMN IF NOT EXISTS razao_social text,
+  ADD COLUMN IF NOT EXISTS nome_fantasia text;
 
 ALTER TABLE public.garantias
   ADD COLUMN IF NOT EXISTS telefone text;

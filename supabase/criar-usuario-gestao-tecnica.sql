@@ -1,6 +1,7 @@
 -- Cria a função (se ainda não existir) e em seguida o usuário Gestão Técnica.
--- Rode o ARQUIVO INTEIRO no SQL Editor (não só o SELECT).
--- Troque e-mail, senha e nome no SELECT do final.
+-- No app, isso agora é feito pelo Administrador do sistema na tela Gestão Técnica.
+-- Rode o ARQUIVO INTEIRO no SQL Editor somente se precisar criar pelo SQL.
+-- Prefira: admin-sistema.sql
 
 ALTER TABLE public.usuarios
   ADD COLUMN IF NOT EXISTS gestao_tecnica BOOLEAN NOT NULL DEFAULT FALSE;

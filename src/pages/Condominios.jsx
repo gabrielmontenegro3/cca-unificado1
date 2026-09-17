@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSession } from '../lib/session';
 import { can } from '../lib/permissions';
-import { criarCondominio, salvarDominioCondominio } from '../lib/api';
+import { criarCondominio, listarConstrutoras, salvarDominioCondominio } from '../lib/api';
 import { GestaoBar } from '../components/GestaoBar';
-import { Alert, AppLogo, Btn, Empty, Field, Toast } from '../components/ui';
+import { Alert, AppLogo, Btn, Empty, Field, MaskedInput, Toast } from '../components/ui';
+import { Icon } from '../components/icons';
 import {
   PADROES,
   PADRAO_COMPLETO,
@@ -12,9 +13,11 @@ import {
   copiarTexto,
   gerarUnidadesDoConfig,
   resumoCriacaoCondominio,
+  uniqueFornecedoresFromForm,
   validarCriacaoCondominio,
 } from '../lib/parseSeed';
-import { loginUrlDoCondominio, dominioUrlDoCondominio } from '../lib/branding';
+import { formatCnpj } from '../lib/format';
+import { loginUrlDoCondominio, dominioUrlDoCondominio, nomeExibicaoConstrutora } from '../lib/branding';
 import { Modal } from '../components/DataList';
 import { UnreadOrb } from '../components/UnreadOrb';
 import { condominiosComNaoLidas } from '../lib/notifications';
@@ -24,6 +27,7 @@ const DRAFT_KEY = 'cca.condoFormDraft';
 
 const EMPTY_FORM = {
   nome: '',
+  construtora_id: '',
   cnpj: '',
   email: '',
   descricao: '',
@@ -48,6 +52,45 @@ const EMPTY_FORM = {
 };
 
 const LETRAS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+
+function FornecedorLogoSlots({ empresas, logos, onPick }) {
+  if (!empresas.length) return null;
+  return (
+    <div className="forn-logo-slots">
+      <p className="hint" style={{ marginTop: 0 }}>
+        Uma logo por empresa. Se o nome se repetir no texto, o registro e a imagem continuam únicos.
+      </p>
+      <ul>
+        {empresas.map((emp) => {
+          const slot = logos[emp.key];
+          return (
+            <li key={emp.key} className="forn-logo-slot">
+              <span className={`forn-logo-preview${slot?.preview ? ' has-file' : ''}`}>
+                {slot?.preview ? (
+                  <img src={slot.preview} alt="" />
+                ) : (
+                  <Icon name="box" size={22} />
+                )}
+              </span>
+              <span className="forn-logo-copy">
+                <strong>{emp.nome}</strong>
+                {emp.cnpj ? <small>{formatCnpj(emp.cnpj) || emp.cnpj}</small> : <small>Logo da empresa</small>}
+              </span>
+              <label className="forn-logo-pick">
+                {slot?.file ? 'Trocar logo' : 'Enviar logo'}
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/*"
+                  onChange={(e) => onPick(emp.key, e.target.files?.[0] || null)}
+                />
+              </label>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
 
 function PadraoBar({ padrao, value, onUse, onCopied }) {
   async function copy() {
@@ -267,6 +310,11 @@ export function CondominiosPortal() {
     imagens: [],
     documentos: [],
   });
+  const [fornecedorLogos, setFornecedorLogos] = useState({});
+  const empresasLogo = useMemo(
+    () => uniqueFornecedoresFromForm(form),
+    [form.catalogo_texto, form.fornecedores_texto],
+  );
   const [error, setError] = useState('');
   const [ok, setOk] = useState('');
   const [toast, setToast] = useState({ message: '', type: 'error' });
@@ -278,6 +326,29 @@ export function CondominiosPortal() {
   const [confirmResumo, setConfirmResumo] = useState(null);
   const [unreadByCondo, setUnreadByCondo] = useState({});
   const [usuariosModal, setUsuariosModal] = useState({ open: false, condoId: '', nome: '' });
+  const [construtoras, setConstrutoras] = useState([]);
+  const [construtoraFiltro, setConstrutoraFiltro] = useState('');
+  const visiveis = useMemo(() => {
+    if (!construtoraFiltro) return memberships;
+    return memberships.filter((row) => {
+      const atual = String(row.condominios?.construtora_id || row.condominios?.construtoras?.id || '').toLowerCase();
+      return atual && atual === String(construtoraFiltro).toLowerCase();
+    });
+  }, [memberships, construtoraFiltro]);
+
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const list = await listarConstrutoras();
+        if (!live) return;
+        setConstrutoras(list || []);
+      } catch {
+        if (live) setConstrutoras([]);
+      }
+    })();
+    return () => { live = false; };
+  }, []);
 
   useEffect(() => {
     let live = true;
@@ -300,6 +371,22 @@ export function CondominiosPortal() {
     sessionStorage.removeItem(DRAFT_KEY);
     setForm(EMPTY_FORM);
     setCreating(false);
+  }
+
+  function setFornecedorLogo(key, file) {
+    setFornecedorLogos((prev) => {
+      const current = prev[key];
+      if (current?.preview) URL.revokeObjectURL(current.preview);
+      if (!file) {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      }
+      return {
+        ...prev,
+        [key]: { file, preview: URL.createObjectURL(file) },
+      };
+    });
   }
 
   function setField(key, value) {
@@ -365,7 +452,11 @@ export function CondominiosPortal() {
       setError(issues[0]);
       return;
     }
-    setConfirmResumo(resumoCriacaoCondominio({ ...form, ...files }));
+    setConfirmResumo(resumoCriacaoCondominio({
+      ...form,
+      ...files,
+      construtora_nome: nomeExibicaoConstrutora(construtoras.find((row) => row.id === form.construtora_id)),
+    }));
     setConfirmOpen(true);
   }
 
@@ -378,8 +469,19 @@ export function CondominiosPortal() {
       const issues = validarCriacaoCondominio({ ...form, ...files });
       if (issues.length) throw new Error(issues[0]);
 
-      await criarCondominio({ ...form, ...files }, session.user.id);
+      await criarCondominio({
+        ...form,
+        ...files,
+        fornecedorLogos,
+        construtora_nome: nomeExibicaoConstrutora(construtoras.find((row) => row.id === form.construtora_id)),
+      }, session.user.id);
       await reloadMemberships();
+      setFornecedorLogos((prev) => {
+        Object.values(prev).forEach((slot) => {
+          if (slot?.preview) URL.revokeObjectURL(slot.preview);
+        });
+        return {};
+      });
       setFiles({
         logo: null,
         imagem_visao_geral: null,
@@ -447,15 +549,46 @@ export function CondominiosPortal() {
 
         <Alert error={error || sessionError} ok={ok} />
 
+        {!creating && construtoras.length ? (
+          <div className="row" style={{ marginBottom: 16 }}>
+            <select value={construtoraFiltro} onChange={(e) => setConstrutoraFiltro(e.target.value)}>
+              <option value="">Todas as construtoras</option>
+              {construtoras.map((row) => (
+                <option key={row.id} value={row.id}>{nomeExibicaoConstrutora(row)}</option>
+              ))}
+            </select>
+          </div>
+        ) : null}
+
         {creating ? (
           <form className="stack" onSubmit={onSubmit} style={{ marginBottom: 24 }}>
             <Section title="Identificação">
+              <Field label="Construtora">
+                <select
+                  value={form.construtora_id}
+                  onChange={(e) => setField('construtora_id', e.target.value)}
+                  required
+                >
+                  <option value="">Selecione a construtora</option>
+                  {construtoras.map((row) => (
+                    <option key={row.id} value={row.id}>{nomeExibicaoConstrutora(row)}</option>
+                  ))}
+                </select>
+              </Field>
+              {!construtoras.length ? (
+                <p className="hint">Cadastre uma construtora na aba Construtoras antes de criar o condomínio.</p>
+              ) : null}
               <Field label="Nome">
                 <input value={form.nome} onChange={(e) => setField('nome', e.target.value)} required />
               </Field>
               <div className="grid grid-2">
                 <Field label="CNPJ">
-                  <input value={form.cnpj} onChange={(e) => setField('cnpj', e.target.value)} />
+                  <MaskedInput
+                    mask="cnpj"
+                    value={form.cnpj}
+                    onChange={(cnpj) => setField('cnpj', cnpj)}
+                    placeholder="00.000.000/0000-00"
+                  />
                 </Field>
                 <Field label="E-mail">
                   <input type="email" value={form.email} onChange={(e) => setField('email', e.target.value)} />
@@ -571,6 +704,11 @@ export function CondominiosPortal() {
                   onCopied={(msg) => { setOk(msg); setError(''); }}
                 />
                 <textarea className="tall" placeholder={PADROES.fornecedores} value={form.fornecedores_texto} onChange={(e) => setField('fornecedores_texto', e.target.value)} />
+                <FornecedorLogoSlots
+                  empresas={empresasLogo}
+                  logos={fornecedorLogos}
+                  onPick={setFornecedorLogo}
+                />
               </Field>
               <Field label="Materiais">
                 <p className="hint" style={{ marginTop: 0 }}>
@@ -586,7 +724,7 @@ export function CondominiosPortal() {
               </Field>
               <Field label="Locais">
                 <p className="hint" style={{ marginTop: 0 }}>
-                  Nome · descrição
+                  Nome · descrição · privativa ou comum
                 </p>
                 <PadraoBar
                   padrao={PADROES.locais}
@@ -668,6 +806,7 @@ export function CondominiosPortal() {
           {confirmResumo ? (
             <ul className="confirm-resumo">
               <li><strong>Nome:</strong> {confirmResumo.nome}</li>
+              {confirmResumo.construtora ? <li><strong>Construtora:</strong> {confirmResumo.construtora}</li> : null}
               {confirmResumo.cidade ? <li><strong>Cidade:</strong> {confirmResumo.cidade}</li> : null}
               <li><strong>Fornecedores:</strong> {confirmResumo.fornecedores}</li>
               <li><strong>Materiais:</strong> {confirmResumo.materiais}</li>
@@ -685,14 +824,16 @@ export function CondominiosPortal() {
           ) : null}
         </Modal>
 
-        {!memberships.length && !creating ? (
+        {!visiveis.length && !creating ? (
           <div className="panel">
-            <Empty text="Nenhum condomínio cadastrado. Clique em criar novo condomínio." />
+            <Empty text={memberships.length ? 'Nenhum condomínio nesta construtora.' : 'Nenhum condomínio cadastrado. Clique em criar novo condomínio.'} />
           </div>
         ) : (
           <div className="condo-grid">
-            {memberships.map((row) => {
+            {visiveis.map((row) => {
               const nome = row.condominios?.nome || 'Condomínio';
+              const construtoraNome = nomeExibicaoConstrutora(row.condominios?.construtoras)
+                || nomeExibicaoConstrutora(construtoras.find((item) => item.id === row.condominios?.construtora_id));
               const loginUrl = loginUrlDoCondominio(row.condominio_id, nome);
               const dominioSalvo = row.condominios?.dominio || '';
               const dominioUrl = dominioUrlDoCondominio(dominioSalvo);
@@ -716,6 +857,7 @@ export function CondominiosPortal() {
                     <strong>{nome}</strong>
                     {row.condominios?.ativo === false ? <span className="condo-status">Inativo</span> : null}
                   </header>
+                  {construtoraNome ? <p className="muted" style={{ margin: 0 }}>{construtoraNome}</p> : null}
 
                   <div className="condo-links">
                     <div className="condo-link">

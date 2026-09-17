@@ -1,19 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useSession } from '../lib/session';
-import { can, STATUS_CHAMADO, STATUS_LABEL } from '../lib/permissions';
-import { chamadoNumero, formatChatTime, formatDateTime } from '../lib/format';
-import { criarChamado, minhaUnidade, enviarMensagemChamado, garantirChatChamado, anexarArquivosNasMensagens, enviarArquivoChamado, resolverVisitaAgendadaChamado, avaliarChamado } from '../lib/api';
-import { classeListaConversa, mapaLeituraConversas, marcarConversaLidaPorChamado, mensagemEhNova } from '../lib/notifications';
-import { Alert, Badge, Btn, Empty, Field, Page } from '../components/ui';
+import { can, ehCargoAdministracao, ehCargoConstrutora, ehChamadoAdministracao, STATUS_CHAMADO, STATUS_LABEL, UNIDADE_AREAS_COMUNS } from '../lib/permissions';
+import { chamadoNumero, formatDateTime, labelUnidade, nomePessoa, nomeSolicitanteChamado } from '../lib/format';
+import { criarChamado, minhaUnidade, enviarMensagemChamado, garantirChatChamado, anexarArquivosNasMensagens, enviarArquivoChamado, avaliarChamado, juntarMensagensComAbertura, hidratarNomesChamados, hidratarNomesMensagens, listarAgendamentosVisitaChamado } from '../lib/api';
+import { ocorrenciaConcluida } from '../lib/ocorrenciasRelatorio';
+import { classeListaConversa, mapaLeituraConversas, marcarConversaLidaPorChamado } from '../lib/notifications';
+import { Alert, Badge, Btn, ChamadoAdminBanner, ChamadoAdminTag, Empty, Field, Page } from '../components/ui';
 import { Icon } from '../components/icons';
-import { ChatComposer, ChatHeader, ChatMensagem } from '../components/Chat';
+import { ChatComposer, ChatHeader, ChatLog } from '../components/Chat';
 import { StatusPicker } from '../components/StatusPicker';
 import { UnreadOrb } from '../components/UnreadOrb';
-import { AgendarVisitaModal, VisitaAgendadaBanner } from './AgendarVisita';
+import { AgendarVisitaModal } from './AgendarVisita';
 import { SatisfacaoChamado, notaSatisfacao } from '../components/SatisfacaoEstrelas';
-import { ocorrenciaConcluida } from '../lib/ocorrenciasRelatorio';
+import { CriarLaudoModal } from '../components/CriarLaudoModal';
 
 export function ChamadosPage() {
   const { condoId, cargoTipo, session } = useSession();
@@ -29,13 +30,13 @@ export function ChamadosPage() {
     if (!condoId) return;
     let query = supabase
       .from('chamados')
-      .select('*, usuarios:solicitante_id(nome), unidades(identificacao), locais(nome)')
+      .select('*, usuarios:solicitante_id(nome), unidades(identificacao, bloco, andar), locais(nome)')
       .eq('condominio_id', condoId)
       .order('created_at', { ascending: false });
     if (!all) query = query.eq('solicitante_id', session.user.id);
     query.then(async ({ data, error: err }) => {
       if (err) setError(err.message);
-      setRows(data || []);
+      setRows(await hidratarNomesChamados(data || []));
       try {
         const map = await mapaLeituraConversas();
         setLeitura(map.byChamado || {});
@@ -46,13 +47,13 @@ export function ChamadosPage() {
   }, [condoId, all, session.user.id]);
 
   const filtered = rows.filter((row) => {
-    const text = `${row.titulo} ${row.numero_registro}`.toLowerCase();
+    const text = `${row.titulo} ${row.numero_registro} ${nomePessoa(row.usuarios)} ${labelUnidade(row.unidades)}`.toLowerCase();
     return (!status || row.status === status) && text.includes(q.toLowerCase());
   });
 
   return (
     <Page
-      title={all ? 'Chamados' : 'Meus chamados'}
+      title={all ? 'Chamados' : 'Assistência técnica'}
       lead="Abra um atendimento e acompanhe a conversa com a equipe."
       actions={can(cargoTipo, 'create_ticket') ? <Btn to="/chamados/novo" icon="plus">Abrir chamado</Btn> : null}
     >
@@ -74,9 +75,10 @@ export function ChamadosPage() {
           {filtered.map((row) => {
             const estado = leitura[row.id]?.estado;
             const unread = estado === 'nova' || estado === 'nao_lida';
+            const daAdmin = ehChamadoAdministracao(row);
             return (
               <Link
-                className={`ticket-card ${classeListaConversa(estado)}`.trim()}
+                className={`ticket-card${daAdmin ? ' ticket-card--admin' : ''} ${classeListaConversa(estado)}`.trim()}
                 key={row.id}
                 to={`/chamados/${row.id}`}
               >
@@ -89,13 +91,15 @@ export function ChamadosPage() {
                   />
                 ) : null}
                 <div className="ticket-card-top">
-                  <strong>{chamadoNumero(row.numero_registro)}</strong>
-                  <Badge value={row.status} />
+                  <strong className="ticket-card-title">{row.titulo}</strong>
+                  <span className="ticket-card-tags">
+                    {daAdmin ? <ChamadoAdminTag /> : null}
+                    <Badge value={row.status} />
+                  </span>
                 </div>
-                <span className="ticket-card-title">{row.titulo}</span>
                 <small>
-                  {row.unidades?.identificacao || 'Unidade'}
-                  {all && row.usuarios?.nome ? ` · ${row.usuarios.nome}` : ''}
+                  {labelUnidade(row.unidades, 'Unidade')}
+                  {all ? ` · ${nomeSolicitanteChamado(row, { administracao: daAdmin })}` : ''}
                   {' · '}
                   {formatDateTime(row.updated_at)}
                 </small>
@@ -118,6 +122,7 @@ export function ChamadoNovoPage() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const podeAbrir = can(cargoTipo, 'create_ticket');
+  const ehAdminCondo = ehCargoAdministracao(cargoTipo);
 
   useEffect(() => {
     if (!condoId || !podeAbrir) return;
@@ -153,26 +158,35 @@ export function ChamadoNovoPage() {
   }
 
   if (!podeAbrir) {
+    if (ehCargoConstrutora(cargoTipo)) return <Navigate to="/governanca-tecnica" replace />;
     return (
       <Page title="Abrir chamado">
-        <Alert error="Somente o morador pode abrir chamado." />
+        <Alert error="Somente o morador ou a Administração do condomínio podem abrir chamado." />
       </Page>
     );
   }
 
   return (
-    <Page title="Abrir chamado" lead="Descreva o problema. Fotos ajudam a equipe técnica.">
+    <Page
+      title="Abrir chamado"
+      lead={ehAdminCondo
+        ? 'Descreva o problema nas áreas comuns. A Gestão Técnica verá que o chamado é da Administração do condomínio.'
+        : 'Descreva o problema. Fotos ajudam a equipe técnica.'}
+    >
       <Alert error={error} />
       <form className="panel stack" onSubmit={onSubmit}>
         <p className="hint">
-          Unidade: <strong>{unidadePronta ? (unidade?.rotulo || 'Não cadastrada') : 'Carregando…'}</strong>
+          Unidade: <strong>{ehAdminCondo ? UNIDADE_AREAS_COMUNS : (unidadePronta ? (unidade?.rotulo || 'Não cadastrada') : 'Carregando…')}</strong>
         </p>
+        {ehAdminCondo ? (
+          <p className="hint">Este chamado fica atrelado à unidade Áreas comuns, para problemas das áreas comuns do condomínio.</p>
+        ) : null}
         <Field label="Título"><input value={form.titulo} onChange={(e) => setForm({ ...form, titulo: e.target.value })} required /></Field>
         <Field label="Descrição"><textarea value={form.descricao} onChange={(e) => setForm({ ...form, descricao: e.target.value })} required /></Field>
         <Field label="Fotos ou documentos">
           <input type="file" multiple accept="image/*,.pdf" capture="environment" onChange={(e) => setFiles([...e.target.files])} />
         </Field>
-        <Btn type="submit" icon="send" disabled={busy || !unidade?.id}>{busy ? 'Enviando…' : 'Registrar chamado'}</Btn>
+        <Btn type="submit" icon="send" disabled={busy || (!ehAdminCondo && !unidade?.id)}>{busy ? 'Enviando…' : 'Registrar chamado'}</Btn>
       </form>
     </Page>
   );
@@ -191,8 +205,9 @@ export function ChamadoDetalhePage() {
   const [sending, setSending] = useState(false);
   const chatLogRef = useRef(null);
   const [lidaAte, setLidaAte] = useState(null);
-  const [visita, setVisita] = useState(null);
+  const [visitas, setVisitas] = useState([]);
   const [visitaModal, setVisitaModal] = useState(false);
+  const [laudoModal, setLaudoModal] = useState(false);
   const [satBusy, setSatBusy] = useState(false);
   const [satError, setSatError] = useState('');
   const canStatus = can(cargoTipo, 'change_status');
@@ -203,11 +218,12 @@ export function ChamadoDetalhePage() {
   async function load() {
     const { data, error: err } = await supabase
       .from('chamados')
-      .select('*, usuarios:solicitante_id(nome), unidades(identificacao), locais(nome)')
+      .select('*, usuarios:solicitante_id(nome), unidades(identificacao, bloco, andar), locais(nome)')
       .eq('id', id)
       .single();
     if (err) return setError(err.message);
-    setChamado(data);
+    const [ticket] = await hidratarNomesChamados([data]);
+    setChamado(ticket);
     const hist = await supabase.from('chamado_status_historico').select('*, usuarios:alterado_por(nome)').eq('chamado_id', id).order('created_at');
     setHistorico(hist.data || []);
     const conv = await supabase.from('conversas').select('*').eq('chamado_id', id).maybeSingle();
@@ -230,14 +246,31 @@ export function ChamadoDetalhePage() {
         .eq('usuario_id', session.user.id)
         .maybeSingle();
       setLidaAte(part.data?.ultima_leitura_em || null);
-      const msgs = await supabase.from('mensagens').select('*, usuarios(nome)').eq('conversa_id', convData.id).order('created_at');
+      const msgs = await supabase.from('mensagens').select('*, usuarios:usuario_id(nome)').eq('conversa_id', convData.id).order('created_at');
       const loaded = await anexarArquivosNasMensagens(msgs.data || []);
-      setMensagens(loaded);
+      const joined = await juntarMensagensComAbertura(ticket, loaded);
+      const named = await hidratarNomesMensagens(joined, {
+        solicitanteId: ticket.solicitante_id,
+        solicitanteNome: ticket.usuarios?.nome,
+        condominioId: ticket.condominio_id,
+      });
+      if (named.nomes[ticket.solicitante_id]) {
+        setChamado({
+          ...ticket,
+          usuarios: { ...(ticket.usuarios || {}), nome: named.nomes[ticket.solicitante_id] },
+        });
+      }
+      setMensagens(named.mensagens);
       await marcarConversaLidaPorChamado(id);
-      setVisita(await resolverVisitaAgendadaChamado(id, loaded));
+      setVisitas(await listarAgendamentosVisitaChamado(id));
     } else {
-      setMensagens([]);
-      setVisita(await resolverVisitaAgendadaChamado(id, []));
+      const named = await hidratarNomesMensagens(await juntarMensagensComAbertura(ticket, []), {
+        solicitanteId: ticket.solicitante_id,
+        solicitanteNome: ticket.usuarios?.nome,
+        condominioId: ticket.condominio_id,
+      });
+      setMensagens(named.mensagens);
+      setVisitas(await listarAgendamentosVisitaChamado(id));
     }
     const lau = await supabase.from('laudos_tecnicos').select('id, numero_registro').eq('chamado_id', id).maybeSingle();
     setLaudo(lau.data);
@@ -252,7 +285,7 @@ export function ChamadoDetalhePage() {
     go();
     const t = setTimeout(go, 250);
     return () => clearTimeout(t);
-  }, [mensagens]);
+  }, [mensagens, historico, visitas]);
 
   useEffect(() => {
     if (!conversa?.id) return undefined;
@@ -345,10 +378,10 @@ export function ChamadoDetalhePage() {
 
   if (!chamado) return <Page title="Chamado"><Alert error={error} /></Page>;
 
-  const visiveis = mensagens.filter((m) => !m.excluido_em);
   const podeAvaliar = ehMorador
     && chamado.solicitante_id === session.user.id
     && ocorrenciaConcluida(chamado);
+  const daAdmin = ehChamadoAdministracao(chamado);
 
   return (
     <div className="chamado-page">
@@ -356,24 +389,17 @@ export function ChamadoDetalhePage() {
       <div className="chamado-layout">
         <aside className="chamado-side">
           <StatusPicker value={chamado.status} editable={canStatus} onChange={setTicketStatus} />
-          <h2>{chamado.titulo}</h2>
-          {chamado.descricao ? <p className="chamado-desc">{chamado.descricao}</p> : null}
-          <dl className="chamado-meta">
-            <div>
-              <dt>Solicitante</dt>
-              <dd>{chamado.usuarios?.nome || '—'}</dd>
-            </div>
-            <div>
-              <dt>Unidade</dt>
-              <dd>{chamado.unidades?.identificacao || '—'}</dd>
-            </div>
-          </dl>
-          {laudo && can(cargoTipo, 'view_laudos') ? <Link className="chamado-link" to={`/laudos/${laudo.id}`}>Laudo #{laudo.numero_registro}</Link> : null}
+          {daAdmin ? <ChamadoAdminTag /> : null}
+          {laudo && can(cargoTipo, 'view_laudos') ? (
+            <Btn to={`/governanca-tecnica/${laudo.id}`} variant="ghost" icon="clipboard">
+              Chat do laudo
+            </Btn>
+          ) : null}
           {can(cargoTipo, 'manage_traceability') ? (
             <Btn to={`/rastreabilidade/${id}`} variant="ghost" icon="layers">Rastreabilidade</Btn>
           ) : null}
           {canLaudo && !laudo ? (
-            <Btn to={`/laudos/novo?chamado=${chamado.id}`} icon="clipboard">Criar laudo</Btn>
+            <Btn icon="clipboard" onClick={() => setLaudoModal(true)}>Criar laudo</Btn>
           ) : null}
           {historico.length ? (
             <details className="chamado-tl">
@@ -397,7 +423,7 @@ export function ChamadoDetalhePage() {
           <div className="chat-top">
             <ChatHeader
               title={chamado.titulo}
-              subtitle={`${chamadoNumero(chamado.numero_registro)}${chamado.unidades?.identificacao ? ` · ${chamado.unidades.identificacao}` : ''}`}
+              subtitle={`${chamadoNumero(chamado.numero_registro)} · ${nomeSolicitanteChamado(chamado, { administracao: daAdmin })}${labelUnidade(chamado.unidades) ? ` · ${labelUnidade(chamado.unidades)}` : ''}`}
             >
               {podeAgendar ? (
                 <Btn variant="ghost" icon="calendar" onClick={() => setVisitaModal(true)}>
@@ -405,7 +431,7 @@ export function ChamadoDetalhePage() {
                 </Btn>
               ) : null}
             </ChatHeader>
-            {ehMorador ? <VisitaAgendadaBanner visita={visita} /> : null}
+            {daAdmin ? <ChamadoAdminBanner /> : null}
             {podeAvaliar ? (
               <SatisfacaoChamado
                 nota={notaSatisfacao(chamado.satisfacao_estrelas)}
@@ -416,16 +442,16 @@ export function ChamadoDetalhePage() {
             ) : null}
           </div>
           <div className="chat-log" ref={chatLogRef}>
-            {visiveis.map((m) => (
-              <ChatMensagem
-                key={m.id}
-                mensagem={m}
-                mine={m.usuario_id === session.user.id}
-                isNew={mensagemEhNova(m, session.user.id, lidaAte)}
-                quando={formatChatTime(m.created_at)}
-              />
-            ))}
-            {!visiveis.length ? <Empty text="Envie a primeira mensagem." /> : null}
+            <ChatLog
+              mensagens={mensagens}
+              historico={historico}
+              visitas={visitas}
+              sessionUserId={session.user.id}
+              lidaAte={lidaAte}
+              solicitanteId={chamado.solicitante_id}
+              solicitanteNome={nomePessoa(chamado.usuarios)}
+              origemAdmin={daAdmin}
+            />
           </div>
           <ChatComposer
             value={texto}
@@ -441,6 +467,11 @@ export function ChamadoDetalhePage() {
         onClose={() => setVisitaModal(false)}
         chamadoId={id}
         onScheduled={load}
+      />
+      <CriarLaudoModal
+        open={laudoModal}
+        onClose={() => setLaudoModal(false)}
+        chamado={chamado}
       />
     </div>
   );

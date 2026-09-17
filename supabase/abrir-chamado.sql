@@ -1,5 +1,8 @@
--- Chamado só pelo morador, com a unidade do cadastro dele.
+-- Chamado pelo morador (unidade do cadastro) ou pela Administração (Áreas comuns).
 -- Cria user_is_staff se faltar. Rode o ARQUIVO INTEIRO.
+
+ALTER TABLE public.chamados
+  ADD COLUMN IF NOT EXISTS origem text NOT NULL DEFAULT 'morador';
 
 GRANT SELECT ON TABLE public.cargos TO authenticated;
 GRANT SELECT, INSERT, UPDATE ON TABLE public.chamados TO authenticated;
@@ -115,7 +118,10 @@ CREATE POLICY ch_insert ON public.chamados
   FOR INSERT TO authenticated
   WITH CHECK (
     solicitante_id = auth.uid()
-    AND public.user_cargo_tipo(condominio_id) = 'morador'::public.tipo_cargo
+    AND public.user_cargo_tipo(condominio_id) IN (
+      'morador'::public.tipo_cargo,
+      'administracao'::public.tipo_cargo
+    )
   );
 
 CREATE POLICY ch_update ON public.chamados
@@ -130,6 +136,35 @@ CREATE POLICY ch_update ON public.chamados
     OR public.user_is_gestao(condominio_id)
     OR public.user_is_staff(condominio_id)
   );
+
+CREATE OR REPLACE FUNCTION public.garantir_unidade_areas_comuns(p_condominio_id uuid)
+RETURNS uuid
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_id uuid;
+BEGIN
+  IF p_condominio_id IS NULL THEN
+    RAISE EXCEPTION 'Condomínio inválido';
+  END IF;
+
+  SELECT u.id INTO v_id
+  FROM public.unidades u
+  WHERE u.condominio_id = p_condominio_id
+    AND lower(trim(u.identificacao)) IN ('áreas comuns', 'areas comuns')
+  LIMIT 1;
+
+  IF v_id IS NULL THEN
+    INSERT INTO public.unidades (condominio_id, identificacao)
+    VALUES (p_condominio_id, 'Áreas comuns')
+    RETURNING id INTO v_id;
+  END IF;
+
+  RETURN v_id;
+END;
+$$;
 
 DROP FUNCTION IF EXISTS public.abrir_chamado(uuid, text, text, uuid, uuid);
 DROP FUNCTION IF EXISTS public.abrir_chamado(uuid, text, text);
@@ -148,6 +183,7 @@ DECLARE
   v_row public.chamados;
   v_cargo public.tipo_cargo;
   v_unidade uuid;
+  v_origem text;
 BEGIN
   IF auth.uid() IS NULL THEN
     RAISE EXCEPTION 'Não autenticado';
@@ -157,23 +193,30 @@ BEGIN
   END IF;
 
   v_cargo := public.user_cargo_tipo(p_condominio_id);
-  IF v_cargo IS DISTINCT FROM 'morador'::public.tipo_cargo THEN
-    RAISE EXCEPTION 'Somente o morador pode abrir chamado';
+  IF v_cargo IS DISTINCT FROM 'morador'::public.tipo_cargo
+     AND v_cargo IS DISTINCT FROM 'administracao'::public.tipo_cargo THEN
+    RAISE EXCEPTION 'Somente o morador ou a Administração do condomínio podem abrir chamado';
   END IF;
 
-  SELECT um.unidade_id INTO v_unidade
-  FROM public.unidade_moradores um
-  JOIN public.unidades u ON u.id = um.unidade_id
-  WHERE um.usuario_id = auth.uid()
-    AND u.condominio_id = p_condominio_id
-  LIMIT 1;
+  IF v_cargo = 'administracao'::public.tipo_cargo THEN
+    v_unidade := public.garantir_unidade_areas_comuns(p_condominio_id);
+    v_origem := 'administracao';
+  ELSE
+    SELECT um.unidade_id INTO v_unidade
+    FROM public.unidade_moradores um
+    JOIN public.unidades u ON u.id = um.unidade_id
+    WHERE um.usuario_id = auth.uid()
+      AND u.condominio_id = p_condominio_id
+    LIMIT 1;
+    v_origem := 'morador';
+  END IF;
 
   IF v_unidade IS NULL THEN
     RAISE EXCEPTION 'Seu cadastro não tem unidade. Peça à Gestão Técnica para informar bloco/casa ou apto.';
   END IF;
 
   INSERT INTO public.chamados (
-    condominio_id, solicitante_id, unidade_id, titulo, descricao, status, prioridade
+    condominio_id, solicitante_id, unidade_id, titulo, descricao, status, prioridade, origem
   ) VALUES (
     p_condominio_id,
     auth.uid(),
@@ -181,14 +224,17 @@ BEGIN
     trim(p_titulo),
     NULLIF(trim(COALESCE(p_descricao, '')), ''),
     'aberto',
-    'normal'
+    'normal',
+    v_origem
   )
   RETURNING * INTO v_row;
 
   INSERT INTO public.chamado_status_historico (
     chamado_id, status_anterior, status_novo, alterado_por, observacao
   ) VALUES (
-    v_row.id, NULL, 'aberto', auth.uid(), 'Chamado aberto'
+    v_row.id, NULL, 'aberto', auth.uid(),
+    CASE WHEN v_origem = 'administracao' THEN 'Chamado aberto pela Administração do condomínio'
+         ELSE 'Chamado aberto' END
   );
 
   INSERT INTO public.conversas (condominio_id, tipo, titulo, chamado_id)
@@ -206,27 +252,51 @@ $$;
 
 CREATE OR REPLACE FUNCTION public.minha_unidade(p_condominio_id uuid)
 RETURNS jsonb
-LANGUAGE sql
-STABLE
+LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
-  SELECT to_jsonb(x)
-  FROM (
-    SELECT
-      u.id,
-      u.identificacao,
-      u.bloco,
-      CASE
-        WHEN COALESCE(u.bloco, '') <> '' THEN 'Bloco ' || u.bloco || ' / ' || u.identificacao
-        ELSE u.identificacao
-      END AS rotulo
-    FROM public.unidade_moradores um
-    JOIN public.unidades u ON u.id = um.unidade_id
-    WHERE um.usuario_id = auth.uid()
-      AND u.condominio_id = p_condominio_id
-    LIMIT 1
-  ) x;
+DECLARE
+  v_cargo public.tipo_cargo;
+  v_unidade uuid;
+BEGIN
+  v_cargo := public.user_cargo_tipo(p_condominio_id);
+
+  IF v_cargo = 'administracao'::public.tipo_cargo THEN
+    v_unidade := public.garantir_unidade_areas_comuns(p_condominio_id);
+    RETURN (
+      SELECT to_jsonb(x)
+      FROM (
+        SELECT
+          u.id,
+          u.identificacao,
+          u.bloco,
+          u.identificacao AS rotulo
+        FROM public.unidades u
+        WHERE u.id = v_unidade
+      ) x
+    );
+  END IF;
+
+  RETURN (
+    SELECT to_jsonb(x)
+    FROM (
+      SELECT
+        u.id,
+        u.identificacao,
+        u.bloco,
+        CASE
+          WHEN COALESCE(u.bloco, '') <> '' THEN 'Bloco ' || u.bloco || ' / ' || u.identificacao
+          ELSE u.identificacao
+        END AS rotulo
+      FROM public.unidade_moradores um
+      JOIN public.unidades u ON u.id = um.unidade_id
+      WHERE um.usuario_id = auth.uid()
+        AND u.condominio_id = p_condominio_id
+      LIMIT 1
+    ) x
+  );
+END;
 $$;
 
 CREATE OR REPLACE FUNCTION public.after_conversa_insert()
@@ -421,6 +491,7 @@ CREATE POLICY msg_insert ON public.mensagens
     )
   );
 
+GRANT EXECUTE ON FUNCTION public.garantir_unidade_areas_comuns(uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.abrir_chamado(uuid, text, text) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.minha_unidade(uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.pode_falar_no_chamado(uuid) TO authenticated;

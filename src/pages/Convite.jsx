@@ -1,11 +1,18 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { supabaseConfigured } from '../lib/supabase';
+import { supabase, supabaseConfigured } from '../lib/supabase';
 import { CARGO_LABEL } from '../lib/permissions';
-import { aceitarConvite, aceitarConviteCadastro, criarLoginSemTrocarSessao, verConvite } from '../lib/api';
+import { aceitarConvite, aceitarConviteCadastro, criarLoginSemTrocarSessao, salvarFotoUsuario, verConvite } from '../lib/api';
 import { useSession } from '../lib/session';
-import { loadBranding, loginPathDoCondominio, rememberBrandCondo } from '../lib/branding';
+import {
+  loadBranding,
+  loadBrandingConstrutora,
+  loginPathDaConstrutora,
+  loginPathDoCondominio,
+  rememberBrandCondo,
+} from '../lib/branding';
 import { Alert, BrandLogo, Btn, Field } from '../components/ui';
+import { FotoPicker } from '../components/UsuarioCampos';
 
 export function ConvitePage() {
   const { token } = useParams();
@@ -13,12 +20,20 @@ export function ConvitePage() {
   const { session, signOut } = useSession();
   const [info, setInfo] = useState(null);
   const [form, setForm] = useState({ nome: '', email: '', password: '' });
+  const [foto, setFoto] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [criadoOk, setCriadoOk] = useState(false);
   const [brand, setBrand] = useState({ nome: '', logo: '', login: '' });
 
-  const loginTo = loginPathDoCondominio(info?.condominio || brand.nome, info?.condominio_id);
+  const isConstrutora = Boolean(info?.construtora_id);
+  const isGestao = Boolean(info?.gestao_tecnica);
+  const pedeFoto = isConstrutora || isGestao;
+  const loginTo = isGestao
+    ? '/login'
+    : isConstrutora
+      ? loginPathDaConstrutora(info?.construtora || brand.nome, info?.construtora_id)
+      : loginPathDoCondominio(info?.condominio || brand.nome, info?.condominio_id);
 
   useEffect(() => {
     if (!token || !supabaseConfigured) return;
@@ -26,6 +41,10 @@ export function ConvitePage() {
       .then((data) => {
         setInfo(data);
         if (data?.email) setForm((prev) => ({ ...prev, email: data.email }));
+        if (data?.construtora_id) {
+          loadBrandingConstrutora(data.construtora_id).then(setBrand);
+          return;
+        }
         if (data?.condominio_id) {
           rememberBrandCondo(data.condominio_id);
           loadBranding(data.condominio_id).then(setBrand);
@@ -47,7 +66,14 @@ export function ConvitePage() {
       });
       if (!userId) throw new Error('Conta criada, mas o id do usuário não veio. Tente entrar e abrir o link de novo.');
       await aceitarConviteCadastro(token, userId);
-      // Sem erros = conta criada. Trava a tela e oferece só o caminho para o Login.
+      if (foto) {
+        try {
+          await supabase.auth.signInWithPassword({ email: form.email, password: form.password });
+          await salvarFotoUsuario(userId, foto);
+        } catch {
+          /* foto opcional no convite */
+        }
+      }
       setCriadoOk(true);
       try {
         await signOut({ to: loginTo });
@@ -66,6 +92,13 @@ export function ConvitePage() {
     setError('');
     try {
       await aceitarConvite(token);
+      if (foto && session?.user?.id) {
+        try {
+          await salvarFotoUsuario(session.user.id, foto);
+        } catch {
+          /* foto opcional */
+        }
+      }
       navigate('/', { replace: true });
     } catch (err) {
       setError(err.message || 'Não foi possível aceitar o convite.');
@@ -75,15 +108,23 @@ export function ConvitePage() {
   }
 
   const blocked = info && (info.ok === false || info.expirado || info.usado);
+  const titulo = isGestao
+    ? 'Convite para Gestão Técnica'
+    : isConstrutora
+      ? 'Convite para a construtora'
+      : 'Convite para o condomínio';
+  const destinoNome = isGestao
+    ? 'CCA Unificado'
+    : (brand.nome || info?.construtora || info?.condominio || 'CCA Unificado');
 
   return (
     <div className={`auth-wrap${brand.login ? ' auth-wrap-photo' : ''}`} style={brand.login ? { backgroundImage: `url(${brand.login})` } : undefined}>
       <div className="auth-card" style={{ width: 'min(460px, 100%)' }}>
         <div className="brand">
-          <BrandLogo src={brand.logo} name={brand.nome || info?.condominio} />
+          <BrandLogo src={brand.logo} name={destinoNome} />
           <span>
-            <strong>{brand.nome || info?.condominio || 'CCA Unificado'}</strong>
-            <small>Convite para o condomínio</small>
+            <strong>{destinoNome}</strong>
+            <small>{titulo}</small>
           </span>
         </div>
 
@@ -92,8 +133,8 @@ export function ConvitePage() {
             <h1>Conta pronta</h1>
             <Alert ok="Cadastro concluído com sucesso. Agora entre com seu e-mail e senha." />
             <p className="muted">
-              {info?.condominio || brand.nome || 'Condomínio'}
-              {info?.cargo ? ` · ${CARGO_LABEL[info.cargo] || info.cargo}` : ''}
+              {destinoNome}
+              {info?.cargo && !isGestao ? ` · ${CARGO_LABEL[info.cargo] || info.cargo}` : ''}
             </p>
             <Btn to={loginTo} icon="lock">
               Ir para a tela de Login
@@ -104,8 +145,11 @@ export function ConvitePage() {
             <h1>Criar acesso</h1>
             {info?.ok ? (
               <p className="muted">
-                {info.condominio} · {CARGO_LABEL[info.cargo] || info.cargo}
-                {info.unidade ? ` · Unidade ${info.unidade}` : ''}
+                {isGestao
+                  ? 'Gestão Técnica'
+                  : [info.construtora || info.condominio, CARGO_LABEL[info.cargo] || info.cargo, info.unidade ? `Unidade ${info.unidade}` : '']
+                    .filter(Boolean)
+                    .join(' · ')}
               </p>
             ) : null}
             <Alert error={error || (info && info.ok === false ? info.erro : '')} />
@@ -116,12 +160,14 @@ export function ConvitePage() {
               session ? (
                 <div className="stack">
                   <p>Você já está autenticado como {session.user.email}.</p>
+                  {pedeFoto ? <FotoPicker file={foto} onChange={setFoto} hint="Opcional. Você pode enviar a foto agora." /> : null}
                   <Btn icon="check" disabled={busy} onClick={onAcceptExisting}>
                     {busy ? 'Vinculando…' : 'Aceitar convite'}
                   </Btn>
                 </div>
               ) : (
                 <form className="stack" onSubmit={onCreate}>
+                  {pedeFoto ? <FotoPicker file={foto} onChange={setFoto} hint="Opcional. Aparece no seu perfil." /> : null}
                   <Field label="Nome">
                     <input value={form.nome} onChange={(e) => setForm({ ...form, nome: e.target.value })} required disabled={busy} />
                   </Field>

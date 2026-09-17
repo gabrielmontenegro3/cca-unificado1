@@ -2,23 +2,47 @@ import { useEffect, useState } from 'react';
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useSession } from '../lib/session';
 import { supabaseConfigured } from '../lib/supabase';
-import { loadBranding, rememberBrandCondo, isCondoUuid, resolverLoginCondominio, slugCondominio, ehHostPrincipal } from '../lib/branding';
+import {
+  loadBranding,
+  loadBrandingConstrutora,
+  rememberBrandCondo,
+  isCondoUuid,
+  resolverLoginPortal,
+  slugCondominio,
+  ehHostPrincipal,
+} from '../lib/branding';
 import { APP_LOGO, Alert, Btn, Field } from '../components/ui';
 import { Icon } from '../components/icons';
 
 export function LoginPage() {
-  const { session, signIn, signOut, selectCondo, isGestaoTecnica, memberships, loading } = useSession();
+  const {
+    session,
+    signIn,
+    signOut,
+    selectCondo,
+    isGestaoTecnica,
+    isConstrutoraOrg,
+    construtora,
+    memberships,
+    profile,
+    loading,
+  } = useSession();
   const navigate = useNavigate();
   const { condoId: condoParam } = useParams();
   const [searchParams] = useSearchParams();
-  const condoRef = condoParam || searchParams.get('condo') || '';
-  const [targetCondoId, setTargetCondoId] = useState(() => (isCondoUuid(condoRef) ? condoRef : ''));
+  const portalRef = condoParam || searchParams.get('condo') || '';
+  const [target, setTarget] = useState(() => (
+    isCondoUuid(portalRef) ? { tipo: '', id: portalRef } : { tipo: '', id: '' }
+  ));
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [brand, setBrand] = useState({ nome: '', logo: '', login: '', capa: '' });
+
+  const targetCondoId = target.tipo === 'condominio' ? target.id : '';
+  const targetConstrutoraId = target.tipo === 'construtora' ? target.id : '';
 
   useEffect(() => {
     sessionStorage.removeItem('cca.logoutTo');
@@ -27,39 +51,46 @@ export function LoginPage() {
   useEffect(() => {
     let live = true;
     (async () => {
-      if (condoRef) {
-        const id = await resolverLoginCondominio(condoRef);
-        if (!live) return;
-        if (id) {
-          setTargetCondoId(id);
+      async function apply(ref) {
+        const portal = await resolverLoginPortal(ref);
+        if (!live) return Boolean(portal?.id);
+        if (portal?.id) {
+          setTarget({ tipo: portal.tipo, id: portal.id });
           setError('');
-          return;
+          return true;
         }
-        setTargetCondoId('');
-        setError('Não encontramos este condomínio.');
+        return false;
+      }
+
+      if (portalRef) {
+        const ok = await apply(portalRef);
+        if (!ok && live) {
+          setTarget({ tipo: '', id: '' });
+          setError('Não encontramos este portal.');
+        }
         return;
       }
       const host = typeof window !== 'undefined' ? window.location.hostname : '';
       if (host && !ehHostPrincipal(host)) {
-        const id = await resolverLoginCondominio(host);
-        if (!live) return;
-        if (id) {
-          setTargetCondoId(id);
-          return;
-        }
+        const ok = await apply(host);
+        if (ok) return;
       }
-      if (live) setTargetCondoId('');
+      if (live) setTarget({ tipo: '', id: '' });
     })();
     return () => {
       live = false;
     };
-  }, [condoRef]);
+  }, [portalRef]);
 
   useEffect(() => {
-    if (!targetCondoId) return;
-    rememberBrandCondo(targetCondoId);
-    loadBranding(targetCondoId).then(setBrand);
-  }, [targetCondoId]);
+    if (!target.id || !target.tipo) return;
+    if (target.tipo === 'condominio') {
+      rememberBrandCondo(target.id);
+      loadBranding(target.id).then(setBrand);
+      return;
+    }
+    loadBrandingConstrutora(target.id).then(setBrand);
+  }, [target.id, target.tipo]);
 
   useEffect(() => {
     if (!isCondoUuid(condoParam) || !brand.nome) return;
@@ -68,18 +99,25 @@ export function LoginPage() {
   }, [condoParam, brand.nome, navigate]);
 
   useEffect(() => {
-    const title = brand.nome && targetCondoId ? `${brand.nome} · Entrar` : 'CCA Unificado · Entrar';
-    document.title = title;
+    const branded = brand.nome && target.id;
+    document.title = branded ? `${brand.nome} · Entrar` : 'CCA Unificado · Entrar';
     return () => {
       document.title = 'CCA Unificado';
     };
-  }, [brand.nome, targetCondoId]);
+  }, [brand.nome, target.id]);
 
-  const isCondoLogin = Boolean(condoRef || targetCondoId);
-  const pertenceAoCondo = isGestaoTecnica || memberships.some((item) => item.condominio_id === targetCondoId);
+  const isPortalLogin = Boolean(portalRef || target.id);
+  const isConstrutoraLogin = target.tipo === 'construtora';
+  const construtoraAtualId = construtora?.id || profile?.construtora_id || '';
+  const pertenceAoPortal = isGestaoTecnica
+    || (isConstrutoraLogin
+      ? Boolean(construtoraAtualId) && String(construtoraAtualId).toLowerCase() === String(targetConstrutoraId).toLowerCase()
+      : memberships.some((item) => item.condominio_id === targetCondoId) || (
+        Boolean(construtoraAtualId) && memberships.some((item) => item.condominio_id === targetCondoId)
+      ));
 
-  if (session && !loading && !isCondoLogin) {
-    return <Navigate to={isGestaoTecnica ? '/' : '/visao-geral'} replace />;
+  if (session && !loading && !isPortalLogin) {
+    return <Navigate to={isGestaoTecnica || isConstrutoraOrg ? '/' : '/visao-geral'} replace />;
   }
 
   async function onSubmit(e) {
@@ -87,8 +125,11 @@ export function LoginPage() {
     setBusy(true);
     setError('');
     try {
-      await signIn(email, password, { condominioId: targetCondoId || '' });
-      navigate(targetCondoId ? '/visao-geral' : '/', { replace: true });
+      await signIn(email, password, {
+        condominioId: targetCondoId || '',
+        construtoraId: targetConstrutoraId || '',
+      });
+      navigate(targetConstrutoraId ? '/' : (targetCondoId ? '/visao-geral' : '/'), { replace: true });
     } catch (err) {
       setError(err.message || 'Não foi possível entrar.');
     } finally {
@@ -96,26 +137,48 @@ export function LoginPage() {
     }
   }
 
-  function enterCondo() {
-    if (!pertenceAoCondo) {
-      setError('Sua conta não tem acesso a este condomínio.');
+  function enterPortal() {
+    if (!pertenceAoPortal) {
+      setError(isConstrutoraLogin
+        ? 'Sua conta não tem acesso a esta construtora.'
+        : 'Sua conta não tem acesso a este condomínio.');
+      return;
+    }
+    if (isConstrutoraLogin) {
+      navigate('/');
       return;
     }
     selectCondo(targetCondoId);
-    navigate('/visao-geral');
+    navigate(isConstrutoraOrg ? '/governanca-tecnica' : '/visao-geral');
   }
 
-  const nome = isCondoLogin ? brand.nome || 'Condomínio' : 'CCA Unificado';
-  const logoSrc = isCondoLogin ? brand.logo : APP_LOGO;
-  const kicker = isCondoLogin ? 'Portal do condomínio' : 'Gestão Técnica';
+  const nome = isPortalLogin
+    ? brand.nome || (isConstrutoraLogin ? 'Construtora' : 'Condomínio')
+    : 'CCA Unificado';
+  const logoSrc = isPortalLogin ? brand.logo : APP_LOGO;
+  const kicker = isConstrutoraLogin
+    ? 'Portal da construtora'
+    : (isPortalLogin ? 'Portal do condomínio' : 'CCA Unificado');
 
   return (
-    <div className={`auth-screen${isCondoLogin ? ' is-condo' : ' is-cca'}`}>
+    <div className={`auth-screen${isPortalLogin ? ' is-condo' : ' is-cca'}`}>
       <main className="auth-panel">
         <div className="auth-card-login">
-          <div className={`auth-card-logo${isCondoLogin ? '' : ' app-brand'}`}>
-            {logoSrc ? <img src={logoSrc} alt={nome} /> : <span className="mark" aria-hidden="true" />}
-          </div>
+          {isConstrutoraLogin ? (
+            <div className="auth-card-logos">
+              <div className="auth-card-logo app-brand">
+                <img src={APP_LOGO} alt="CCA" />
+              </div>
+              <span className="auth-logos-bar" aria-hidden="true" />
+              <div className="auth-card-logo">
+                {brand.logo ? <img src={brand.logo} alt={nome} /> : <span className="mark" aria-hidden="true" />}
+              </div>
+            </div>
+          ) : (
+            <div className={`auth-card-logo${isPortalLogin ? '' : ' app-brand'}`}>
+              {logoSrc ? <img src={logoSrc} alt={nome} /> : <span className="mark" aria-hidden="true" />}
+            </div>
+          )}
           <p className="auth-kicker">{kicker}</p>
           <h1>{nome}</h1>
           {!supabaseConfigured ? (
@@ -123,17 +186,23 @@ export function LoginPage() {
           ) : null}
           <Alert error={error} />
           {session ? (
+            loading || (isPortalLogin && !target.tipo) ? (
+              <p className="muted">Verificando acesso…</p>
+            ) : (
             <div className="stack">
-              {pertenceAoCondo ? (
+              {pertenceAoPortal ? (
                 <>
                   <p className="muted">Você já está autenticado. Esta é a tela de login de {nome}.</p>
-                  <Btn icon="building" onClick={enterCondo}>
-                    Entrar neste condomínio
+                  <Btn icon="building" onClick={enterPortal}>
+                    {isConstrutoraLogin ? 'Entrar neste portal' : 'Entrar neste condomínio'}
                   </Btn>
                 </>
               ) : (
                 <>
-                  <Alert error="Sua conta não tem acesso a este condomínio." />
+                  <Alert error={isConstrutoraLogin
+                    ? 'Sua conta não tem acesso a esta construtora.'
+                    : 'Sua conta não tem acesso a este condomínio.'}
+                  />
                   <Btn
                     variant="ghost"
                     icon="logout"
@@ -146,6 +215,7 @@ export function LoginPage() {
                 </>
               )}
             </div>
+            )
           ) : (
             <form className="stack" onSubmit={onSubmit}>
               <Field label="E-mail">
@@ -171,7 +241,7 @@ export function LoginPage() {
                   </button>
                 </div>
               </Field>
-              <Btn type="submit" icon="lock" disabled={busy || !supabaseConfigured || (Boolean(condoRef) && !targetCondoId)}>
+              <Btn type="submit" icon="lock" disabled={busy || !supabaseConfigured || (Boolean(portalRef) && !target.id)}>
                 {busy ? 'Entrando…' : 'Acessar'}
               </Btn>
             </form>

@@ -1,91 +1,19 @@
-import { useEffect, useRef, useState } from 'react';
-import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useSession } from '../lib/session';
-import { can } from '../lib/permissions';
-import { chamadoNumero, formatChatTime, formatDate, laudoNumero } from '../lib/format';
-import {
-  criarLaudo,
-  garantirChatLaudo,
-  anexarArquivosNasMensagens,
-  enviarMensagemLaudo,
-  enviarArquivoLaudo,
-} from '../lib/api';
-import { marcarConversaLidaPorLaudo, mensagemEhNova } from '../lib/notifications';
-import { Alert, Btn, Empty, Field, Page } from '../components/ui';
-import { ChatComposer, ChatHeader, ChatMensagem } from '../components/Chat';
-import { DataList, DetailFields, Modal } from '../components/DataList';
+import { can, CRITICIDADE_LAUDO } from '../lib/permissions';
+import { chamadoNumero, labelUnidade } from '../lib/format';
+import { criarLaudo } from '../lib/api';
+import { Alert, Btn, Field, Page } from '../components/ui';
 
 export function LaudosPage() {
-  const { condoId, cargoTipo } = useSession();
-  const navigate = useNavigate();
-  const [rows, setRows] = useState([]);
-  const [error, setError] = useState('');
-  const [selected, setSelected] = useState(null);
-  const canCreate = can(cargoTipo, 'create_laudo');
-  const canView = can(cargoTipo, 'view_laudos');
+  return <Navigate to="/governanca-tecnica" replace />;
+}
 
-  useEffect(() => {
-    if (!condoId || !canView) return;
-    supabase
-      .from('laudos_tecnicos')
-      .select('*, chamados(numero_registro, titulo), usuarios:criado_por(nome)')
-      .eq('condominio_id', condoId)
-      .order('created_at', { ascending: false })
-      .then(({ data, error: err }) => {
-        if (err) setError(err.message);
-        setRows(data || []);
-      });
-  }, [condoId, canView]);
-
-  if (!canView) return <Navigate to="/visao-geral" replace />;
-
-  return (
-    <Page
-      title="Laudos técnicos"
-      lead="Registro formal ligado a um chamado. O chat é entre Gestão Técnica e Construtora."
-      actions={canCreate ? <Btn to="/laudos/novo" icon="plus">Novo laudo</Btn> : null}
-    >
-      <Alert error={error} />
-      <DataList
-        rows={rows}
-        empty="Nenhum laudo."
-        getTitle={(row) => row.titulo || laudoNumero(row.numero_registro)}
-        getSubtitle={(row) => [
-          laudoNumero(row.numero_registro),
-          row.chamados ? `${chamadoNumero(row.chamados.numero_registro)} · ${row.chamados.titulo || ''}` : null,
-          formatDate(row.data_laudo),
-        ].filter(Boolean).join(' · ')}
-        onSelect={setSelected}
-      />
-      <Modal
-        open={Boolean(selected)}
-        title={selected?.titulo || 'Laudo'}
-        onClose={() => setSelected(null)}
-        footer={selected ? (
-          <Btn icon="clipboard" onClick={() => navigate(`/laudos/${selected.id}`)}>
-            Ver chat do laudo
-          </Btn>
-        ) : null}
-      >
-        <DetailFields
-          fields={[
-            { label: 'Número', value: laudoNumero(selected?.numero_registro) },
-            { label: 'Título', value: selected?.titulo },
-            {
-              label: 'Chamado',
-              value: selected?.chamados
-                ? `${chamadoNumero(selected.chamados.numero_registro)} · ${selected.chamados.titulo || ''}`
-                : '—',
-            },
-            { label: 'Criado por', value: selected?.usuarios?.nome || '—' },
-            { label: 'Data', value: formatDate(selected?.data_laudo) },
-            { label: 'Descrição', value: selected?.descricao || '—' },
-          ]}
-        />
-      </Modal>
-    </Page>
-  );
+export function LaudoDetalhePage() {
+  const { id } = useParams();
+  return <Navigate to={`/governanca-tecnica/${id}`} replace />;
 }
 
 export function LaudoNovoPage() {
@@ -93,7 +21,11 @@ export function LaudoNovoPage() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const [chamados, setChamados] = useState([]);
-  const [form, setForm] = useState({ titulo: '', descricao: '', chamado_id: params.get('chamado') || '' });
+  const [form, setForm] = useState({
+    descricao: '',
+    chamado_id: params.get('chamado') || '',
+    criticidade: 'media',
+  });
   const [files, setFiles] = useState([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -102,7 +34,7 @@ export function LaudoNovoPage() {
     if (!condoId) return;
     supabase
       .from('chamados')
-      .select('id, numero_registro, titulo, status')
+      .select('id, numero_registro, titulo, status, unidades(identificacao, bloco, andar)')
       .eq('condominio_id', condoId)
       .order('created_at', { ascending: false })
       .then(({ data, error: err }) => {
@@ -129,11 +61,11 @@ export function LaudoNovoPage() {
         condominioId: condoId,
         userId: session.user.id,
         chamadoId: form.chamado_id,
-        titulo: form.titulo,
         descricao: form.descricao,
+        criticidade: form.criticidade,
         files,
       });
-      navigate(`/laudos/${laudo.id}`);
+      navigate(`/governanca-tecnica/${laudo.id}`);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -142,7 +74,7 @@ export function LaudoNovoPage() {
   }
 
   return (
-    <Page title="Novo laudo" lead="Vincule o laudo a um chamado deste condomínio.">
+    <Page title="Novo laudo" lead="Vincule o laudo a um chamado deste condomínio. O acompanhamento fica entre Gestão Técnica e Construtora.">
       <Alert error={error} />
       <form className="panel stack" onSubmit={onSubmit}>
         <Field label="Chamado relacionado">
@@ -154,206 +86,26 @@ export function LaudoNovoPage() {
             <option value="">Selecione um chamado deste condomínio</option>
             {chamados.map((c) => (
               <option key={c.id} value={c.id}>
-                {chamadoNumero(c.numero_registro)} · {c.titulo}
+                {labelUnidade(c.unidades, 'Unidade')} · {chamadoNumero(c.numero_registro)}
               </option>
             ))}
           </select>
         </Field>
-        <Field label="Título"><input value={form.titulo} onChange={(e) => setForm({ ...form, titulo: e.target.value })} required /></Field>
+        <Field label="Grau de criticidade">
+          <select
+            value={form.criticidade}
+            onChange={(e) => setForm({ ...form, criticidade: e.target.value })}
+            required
+          >
+            {CRITICIDADE_LAUDO.map((item) => (
+              <option key={item.id} value={item.id}>{item.label}</option>
+            ))}
+          </select>
+        </Field>
         <Field label="Descrição"><textarea value={form.descricao} onChange={(e) => setForm({ ...form, descricao: e.target.value })} /></Field>
         <Field label="Arquivos"><input type="file" multiple onChange={(e) => setFiles([...e.target.files])} /></Field>
-        <Btn type="submit" icon="clipboard" disabled={busy}>{busy ? 'Criando…' : 'Criar laudo'}</Btn>
+        <Btn type="submit" icon="clipboard" disabled={busy}>{busy ? 'Criando…' : 'Criar e abrir chat'}</Btn>
       </form>
     </Page>
-  );
-}
-
-export function LaudoDetalhePage() {
-  const { id } = useParams();
-  const { condoId, cargoTipo, session } = useSession();
-  const [row, setRow] = useState(null);
-  const [mensagens, setMensagens] = useState([]);
-  const [texto, setTexto] = useState('');
-  const [error, setError] = useState('');
-  const [sending, setSending] = useState(false);
-  const chatLogRef = useRef(null);
-  const [lidaAte, setLidaAte] = useState(null);
-  const canView = can(cargoTipo, 'view_laudos');
-  const canChat = can(cargoTipo, 'chat_laudo');
-
-  async function load() {
-    const { data, error: err } = await supabase
-      .from('laudos_tecnicos')
-      .select('*, chamados(id, numero_registro, titulo), usuarios:criado_por(nome)')
-      .eq('id', id)
-      .single();
-    if (err) {
-      setError(err.message);
-      setRow(null);
-      return;
-    }
-    setRow(data);
-    try {
-      let convId = null;
-      if (canChat) {
-        convId = await garantirChatLaudo(id, session.user.id);
-      } else {
-        const conv = await supabase.from('conversas').select('id').eq('laudo_id', id).maybeSingle();
-        convId = conv.data?.id || null;
-      }
-      if (!convId) {
-        setMensagens([]);
-        setLidaAte(null);
-        return;
-      }
-      const part = await supabase
-        .from('conversa_participantes')
-        .select('ultima_leitura_em')
-        .eq('conversa_id', convId)
-        .eq('usuario_id', session.user.id)
-        .maybeSingle();
-      setLidaAte(part.data?.ultima_leitura_em || null);
-      const msgs = await supabase
-        .from('mensagens')
-        .select('*, usuarios(nome)')
-        .eq('conversa_id', convId)
-        .order('created_at');
-      setMensagens(await anexarArquivosNasMensagens(msgs.data || []));
-      await marcarConversaLidaPorLaudo(id);
-    } catch (chatErr) {
-      const conv = await supabase.from('conversas').select('id').eq('laudo_id', id).maybeSingle();
-      if (conv.data?.id) {
-        const msgs = await supabase
-          .from('mensagens')
-          .select('*, usuarios(nome)')
-          .eq('conversa_id', conv.data.id)
-          .order('created_at');
-        setMensagens(await anexarArquivosNasMensagens(msgs.data || []));
-        await marcarConversaLidaPorLaudo(id);
-      } else {
-        setError(chatErr.message || err.message || '');
-      }
-    }
-  }
-
-  useEffect(() => { load(); }, [id]);
-
-  useEffect(() => {
-    const el = chatLogRef.current;
-    if (!el) return undefined;
-    const go = () => { el.scrollTop = el.scrollHeight; };
-    go();
-    const t = setTimeout(go, 250);
-    return () => clearTimeout(t);
-  }, [mensagens]);
-
-  if (!canView) return <Navigate to="/visao-geral" replace />;
-
-  async function send(e) {
-    e.preventDefault();
-    if (!canChat || sending) return;
-    const body = texto.trim();
-    if (!body) return;
-    setSending(true);
-    setError('');
-    try {
-      await enviarMensagemLaudo(id, body, session.user.id);
-      setTexto('');
-      await load();
-    } catch (err) {
-      setError(err.message || 'Não foi possível enviar a mensagem.');
-    } finally {
-      setSending(false);
-    }
-  }
-
-  async function sendFile(file) {
-    if (!file || !canChat) return;
-    setSending(true);
-    setError('');
-    try {
-      await enviarArquivoLaudo({
-        laudoId: id,
-        condominioId: condoId || row?.condominio_id,
-        userId: session.user.id,
-        file,
-      });
-      await load();
-    } catch (err) {
-      setError(err.message || 'Não foi possível enviar o arquivo.');
-    } finally {
-      setSending(false);
-    }
-  }
-
-  if (!row) return <Page title="Laudo"><Alert error={error} /></Page>;
-
-  const visiveis = mensagens.filter((m) => !m.excluido_em);
-
-  return (
-    <div className="chamado-page">
-      <Alert error={error} />
-      <div className="chamado-layout">
-        <aside className="chamado-side">
-          <h2>{row.titulo}</h2>
-          {row.descricao ? <p className="chamado-desc">{row.descricao}</p> : null}
-          <dl className="chamado-meta">
-            <div>
-              <dt>Registro</dt>
-              <dd>{laudoNumero(row.numero_registro)}</dd>
-            </div>
-            <div>
-              <dt>Chamado</dt>
-              <dd>
-                {row.chamados ? (
-                  <Link to={`/chamados/${row.chamados.id}`}>
-                    {chamadoNumero(row.chamados.numero_registro)}
-                    {row.chamados.titulo ? ` · ${row.chamados.titulo}` : ''}
-                  </Link>
-                ) : '—'}
-              </dd>
-            </div>
-            <div>
-              <dt>Criado por</dt>
-              <dd>{row.usuarios?.nome || 'Gestão Técnica'}</dd>
-            </div>
-            <div>
-              <dt>Data</dt>
-              <dd>{formatDate(row.data_laudo)}</dd>
-            </div>
-          </dl>
-        </aside>
-
-        <section className="chat-shell">
-          <ChatHeader
-            title="Chat do laudo"
-            subtitle="Gestão Técnica e Construtora"
-          />
-          <div className="chat-log" ref={chatLogRef}>
-            {visiveis.map((m) => (
-              <ChatMensagem
-                key={m.id}
-                mensagem={m}
-                mine={m.usuario_id === session.user.id}
-                isNew={mensagemEhNova(m, session.user.id, lidaAte)}
-                quando={formatChatTime(m.created_at)}
-              />
-            ))}
-            {!visiveis.length ? <Empty text="Nenhuma mensagem ainda." /> : null}
-          </div>
-          {canChat ? (
-            <ChatComposer
-              value={texto}
-              onChange={setTexto}
-              sending={sending}
-              onSend={send}
-              onFile={sendFile}
-            />
-          ) : (
-            <p className="chat-readonly">Somente leitura. A Gestão Técnica e a Construtora conversam neste chat.</p>
-          )}
-        </section>
-      </div>
-    </div>
   );
 }

@@ -2,24 +2,33 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useSession } from '../lib/session';
-import { chamadoNumero, formatChatTime, formatDateTime, laudoNumero } from '../lib/format';
-import { anexarArquivosNasMensagens, enviarArquivoLaudo, enviarMensagemLaudo, garantirChatLaudo } from '../lib/api';
+import { chamadoNumero, rotuloLaudoUnidade } from '../lib/format';
+import {
+  anexarArquivosNasMensagens,
+  carregarLaudoGovernanca,
+  enviarArquivoLaudo,
+  enviarMensagemLaudo,
+  garantirChatLaudo,
+  hidratarNomesMensagens,
+  juntarMensagensComAberturaLaudo,
+  hidratarFotosMensagens,
+  listarLaudosGlobais,
+} from '../lib/api';
 import {
   classeListaConversa,
   mapaLeituraConversas,
   marcarConversaLidaPorLaudo,
-  mensagemEhNova,
 } from '../lib/notifications';
 import { Alert, Btn, Empty } from '../components/ui';
 import { Icon } from '../components/icons';
 import { GestaoBar } from '../components/GestaoBar';
-import { ChatComposer, ChatHeader, ChatMensagem } from '../components/Chat';
+import { ChatComposer, ChatHeader, CriticidadeTag, LaudoThread, LaudoThumb } from '../components/Chat';
 import { UnreadOrb } from '../components/UnreadOrb';
 
 export function LaudosGlobaisPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { isGestaoTecnica, memberships, session, selectCondo } = useSession();
+  const { isGestaoTecnica, isConstrutoraOrg, memberships, session, selectCondo } = useSession();
   const [rows, setRows] = useState([]);
   const [condoFiltro, setCondoFiltro] = useState('');
   const [q, setQ] = useState('');
@@ -41,25 +50,15 @@ export function LaudosGlobaisPage() {
   }, [memberships]);
 
   async function loadLista() {
-    let { data, error: err } = await supabase
-      .from('laudos_tecnicos')
-      .select('*, chamados(id, numero_registro, titulo), usuarios:criado_por(nome), condominios(id, nome)')
-      .order('created_at', { ascending: false });
-    if (err) {
-      const plain = await supabase
-        .from('laudos_tecnicos')
-        .select('*, chamados(id, numero_registro, titulo), usuarios:criado_por(nome)')
-        .order('created_at', { ascending: false });
-      data = plain.data;
-      err = plain.error;
-    }
-    if (err) setError(err.message);
-    setRows(data || []);
     try {
+      const data = await listarLaudosGlobais();
+      setRows(data);
+      setError('');
       const map = await mapaLeituraConversas();
       setLeitura(map.byLaudo || {});
-    } catch {
-      setLeitura({});
+    } catch (err) {
+      setError(err.message || 'Não foi possível carregar os laudos.');
+      setRows([]);
     }
   }
 
@@ -70,19 +69,19 @@ export function LaudosGlobaisPage() {
       setLidaAte(null);
       return;
     }
-    const { data, error: err } = await supabase
-      .from('laudos_tecnicos')
-      .select('*, chamados(id, numero_registro, titulo), usuarios:criado_por(nome), condominios(id, nome)')
-      .eq('id', laudoId)
-      .single();
-    if (err) {
-      setError(err.message);
-      setLaudo(null);
-      setMensagens([]);
-      return;
-    }
-    setLaudo(data);
     try {
+      const data = await carregarLaudoGovernanca(laudoId);
+      if (!data) {
+        setError('Laudo não encontrado.');
+        setLaudo(null);
+        setMensagens([]);
+        return;
+      }
+      if (!data.condominios && data.condominio_id) {
+        data.condominios = condos.find((c) => c.id === data.condominio_id) || null;
+      }
+      setLaudo(data);
+      setError('');
       const convId = await garantirChatLaudo(laudoId, session.user.id);
       const part = await supabase
         .from('conversa_participantes')
@@ -93,51 +92,51 @@ export function LaudosGlobaisPage() {
       setLidaAte(part.data?.ultima_leitura_em || null);
       const msgs = await supabase
         .from('mensagens')
-        .select('*, usuarios(nome)')
+        .select('*, usuarios:usuario_id(nome)')
         .eq('conversa_id', convId)
         .order('created_at');
-      setMensagens(await anexarArquivosNasMensagens(msgs.data || []));
+      const withFiles = await anexarArquivosNasMensagens(msgs.data || []);
+      const joined = await juntarMensagensComAberturaLaudo(data, withFiles);
+      const named = await hidratarNomesMensagens(joined, {
+        condominioId: data.condominio_id,
+      });
+      setMensagens(await hidratarFotosMensagens(named.mensagens));
       await marcarConversaLidaPorLaudo(laudoId);
       const map = await mapaLeituraConversas();
       setLeitura(map.byLaudo || {});
     } catch (chatErr) {
-      const conv = await supabase.from('conversas').select('id').eq('laudo_id', laudoId).maybeSingle();
-      if (conv.data?.id) {
-        const msgs = await supabase
-          .from('mensagens')
-          .select('*, usuarios(nome)')
-          .eq('conversa_id', conv.data.id)
-          .order('created_at');
-        setMensagens(await anexarArquivosNasMensagens(msgs.data || []));
-        await marcarConversaLidaPorLaudo(laudoId);
-      } else {
-        setMensagens([]);
-        setError(chatErr.message || '');
-      }
+      setError(chatErr.message || '');
+      setLaudo(null);
+      setMensagens([]);
     }
   }
 
-  useEffect(() => {
-    if (!isGestaoTecnica) return;
-    loadLista();
-  }, [isGestaoTecnica]);
+  const podeVerGlobais = isGestaoTecnica || isConstrutoraOrg;
 
   useEffect(() => {
-    if (!isGestaoTecnica) return;
+    if (!podeVerGlobais) return;
+    loadLista();
+  }, [podeVerGlobais]);
+
+  useEffect(() => {
+    if (!podeVerGlobais) return;
     loadChat(id);
-  }, [id, isGestaoTecnica, session.user.id]);
+  }, [id, podeVerGlobais, session?.user?.id]);
 
   useEffect(() => {
     const el = chatLogRef.current;
     if (!el) return undefined;
-    const go = () => { el.scrollTop = el.scrollHeight; };
+    const notas = mensagens.filter((m) => !m.abertura);
+    const go = () => {
+      el.scrollTop = notas.length ? el.scrollHeight : 0;
+    };
     go();
     const t = setTimeout(go, 250);
     return () => clearTimeout(t);
   }, [mensagens]);
 
   const filtrados = rows.filter((row) => {
-    const text = `${row.titulo} ${row.numero_registro} ${row.usuarios?.nome || ''} ${row.condominios?.nome || ''} ${row.chamados?.titulo || ''}`.toLowerCase();
+    const text = `${rotuloLaudoUnidade(row)} ${row.chamado_numero || row.chamados?.numero_registro || ''} ${row.condominios?.nome || ''} ${row.criticidade || ''}`.toLowerCase();
     return (!condoFiltro || row.condominio_id === condoFiltro) && text.includes(q.toLowerCase());
   });
 
@@ -193,20 +192,20 @@ export function LaudosGlobaisPage() {
     }
   }
 
-  if (!isGestaoTecnica) {
+  if (!podeVerGlobais) {
     return (
       <div className="portal">
-        <Alert error="Somente a Gestão Técnica acessa os laudos globais." />
+        <Alert error="Somente a Gestão Técnica e a construtora acessam os laudos globais." />
       </div>
     );
   }
 
   return (
     <div className="portal">
-      <GestaoBar />
+      <GestaoBar variant={isConstrutoraOrg ? 'construtora' : 'gestao'} />
       <main className="portal-main wide">
         <div className="page-head">
-          <h1>Laudo técnico</h1>
+          <h1>{isConstrutoraOrg ? 'Governança técnica' : 'Laudo técnico'}</h1>
         </div>
         <Alert error={error} />
         <div className="row" style={{ marginBottom: 16 }}>
@@ -218,7 +217,7 @@ export function LaudosGlobaisPage() {
           </select>
           <label className="search-field">
             <Icon name="search" size={16} />
-            <input placeholder="Pesquisar laudo, chamado ou condomínio" value={q} onChange={(e) => setQ(e.target.value)} />
+            <input placeholder="Pesquisar unidade, chamado ou condomínio" value={q} onChange={(e) => setQ(e.target.value)} />
           </label>
         </div>
 
@@ -231,68 +230,66 @@ export function LaudosGlobaisPage() {
                   const estado = leitura[row.id]?.estado;
                   const unread = estado === 'nova' || estado === 'nao_lida';
                   return (
-                  <button
-                    type="button"
-                    key={row.id}
-                    className={`suporte-item${row.id === id ? ' active' : ''} ${classeListaConversa(estado)}`.trim()}
-                    onClick={() => navigate(`/laudos-globais/${row.id}`)}
-                  >
-                    {unread ? (
-                      <UnreadOrb
-                        count={leitura[row.id]?.nao_lidas || 1}
-                        variant={estado === 'nova' ? 'nova' : 'alerta'}
-                        title={estado === 'nova' ? 'Conversa nova — abrir' : 'Mensagens novas — abrir'}
-                        onClick={() => navigate(`/laudos-globais/${row.id}`)}
-                      />
-                    ) : null}
-                    <div className="suporte-item-top">
-                      <strong>{laudoNumero(row.numero_registro)}</strong>
-                    </div>
-                    <span>{row.titulo}</span>
-                    <small>
-                      {condoFiltro ? null : `${row.condominios?.nome || 'Condomínio'} · `}
-                      {row.chamados ? `${chamadoNumero(row.chamados.numero_registro)} · ${row.chamados.titulo || ''}` : 'Sem chamado'}
-                      {' · '}
-                      {formatDateTime(row.updated_at || row.created_at)}
-                    </small>
-                  </button>
+                    <button
+                      type="button"
+                      key={row.id}
+                      className={`suporte-item laudo-item${row.id === id ? ' active' : ''} ${classeListaConversa(estado)}`.trim()}
+                      onClick={() => navigate(`/laudos-globais/${row.id}`)}
+                    >
+                      {unread ? (
+                        <UnreadOrb
+                          count={leitura[row.id]?.nao_lidas || 1}
+                          variant={estado === 'nova' ? 'nova' : 'alerta'}
+                          title={estado === 'nova' ? 'Conversa nova — abrir' : 'Mensagens novas — abrir'}
+                          onClick={() => navigate(`/laudos-globais/${row.id}`)}
+                        />
+                      ) : null}
+                      <LaudoThumb capa={row.capa} />
+                      <div className="laudo-item-copy">
+                        <strong className="suporte-item-name">{rotuloLaudoUnidade(row)}</strong>
+                        <small className="suporte-item-preview">
+                          {chamadoNumero(row.chamados?.numero_registro ?? row.chamado_numero)}
+                        </small>
+                        <CriticidadeTag value={row.criticidade} />
+                      </div>
+                    </button>
                   );
                 })}
               </section>
             ))}
           </aside>
 
-          <section className={`chat-shell suporte-chat${laudo ? '' : ' empty'}`}>
+          <section className={`chat-shell laudo-shell suporte-chat${laudo ? '' : ' empty'}`}>
             {!laudo ? (
-              <Empty text="Selecione um laudo para ver o chat." />
+              <Empty text="Selecione um laudo para acompanhar." />
             ) : (
               <>
                 <ChatHeader
-                  title={laudo.titulo}
-                  subtitle={`${laudoNumero(laudo.numero_registro)} · ${laudo.condominios?.nome || 'Condomínio'} · Gestão Técnica e Construtora`}
+                  icon="clipboard"
+                  title={rotuloLaudoUnidade(laudo)}
+                  subtitle={`${chamadoNumero(laudo.chamados?.numero_registro ?? laudo.chamado_numero)}${laudo.condominios?.nome ? ` · ${laudo.condominios.nome}` : ''}`}
                 >
+                  <CriticidadeTag value={laudo.criticidade} />
                   <Btn
                     variant="ghost"
                     icon="building"
                     onClick={() => {
                       selectCondo(laudo.condominio_id);
-                      navigate(`/laudos/${laudo.id}`);
+                      navigate(isConstrutoraOrg
+                        ? `/construtora/${laudo.condominio_id}/governanca/${laudo.id}`
+                        : `/governanca-tecnica/${laudo.id}`);
                     }}
                   >
                     Abrir no condomínio
                   </Btn>
                 </ChatHeader>
-                <div className="chat-log" ref={chatLogRef}>
-                  {mensagens.filter((m) => !m.excluido_em).map((m) => (
-                    <ChatMensagem
-                      key={m.id}
-                      mensagem={m}
-                      mine={m.usuario_id === session.user.id}
-                      isNew={mensagemEhNova(m, session.user.id, lidaAte)}
-                      quando={formatChatTime(m.created_at)}
-                    />
-                  ))}
-                  {!mensagens.length ? <Empty text="Nenhuma mensagem ainda." /> : null}
+                <div className="chat-log laudo-log" ref={chatLogRef}>
+                  <LaudoThread
+                    mensagens={mensagens}
+                    sessionUserId={session.user.id}
+                    lidaAte={lidaAte}
+                    empty="Nenhuma nota ainda."
+                  />
                 </div>
                 <ChatComposer
                   value={texto}
@@ -300,6 +297,7 @@ export function LaudosGlobaisPage() {
                   sending={sending}
                   onSend={send}
                   onFile={sendFile}
+                  placeholder="Escreva uma nota para a Construtora"
                 />
               </>
             )}

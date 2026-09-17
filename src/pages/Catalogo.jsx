@@ -1,12 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useSession } from '../lib/session';
-import { formatDate, normalizarCnpj } from '../lib/format';
-import { Alert, Btn, Field, Page } from '../components/ui';
+import { publicOrSignedUrl, salvarLogoFornecedor } from '../lib/api';
+import { formatCnpj, formatDate, formatTelefone, normalizarCnpj } from '../lib/format';
+import { Alert, Btn, Field, MaskedInput, Page } from '../components/ui';
 import { Icon } from '../components/icons';
 import { EditTelaButton, useEditTela } from '../components/EditTela';
 import { DataList, Modal } from '../components/DataList';
+import { AREA_LOCAL } from '../lib/permissions';
+import { areaForLocal, iconForLocal, tipoForLocal } from '../lib/localIcon';
 
 const PRAZO_UNIDADES = [
   { value: 'dias', label: 'Dias' },
@@ -16,6 +19,8 @@ const PRAZO_UNIDADES = [
 
 const FIELD_LABELS = {
   nome: 'Nome',
+  razao_social: 'Razão social',
+  nome_fantasia: 'Nome fantasia',
   cnpj: 'CNPJ',
   contato: 'Vendedor',
   telefone: 'Telefone',
@@ -27,14 +32,16 @@ const FIELD_LABELS = {
   prazo_valor: 'Tempo de garantia',
   prazo_unidade: 'Unidade do prazo',
   data_fim: 'Data final da garantia',
+  area: 'Área',
 };
 
 const FIELD_PLACEHOLDERS = {
   fornecedores: {
-    nome: 'Ex.: Acme Revestimentos',
+    razao_social: 'Ex.: Acme Revestimentos Ltda',
+    nome_fantasia: 'Ex.: Acme Revestimentos',
     cnpj: '00.000.000/0000-00',
     contato: 'Nome do vendedor',
-    telefone: 'Opcional',
+    telefone: '(11) 90000-0000',
     telefone1: '(11) 3000-0000',
     telefone2: 'Opcional',
     localizacao: 'Cidade / endereço',
@@ -57,9 +64,9 @@ const FIELD_PLACEHOLDERS = {
 
 /** Campos sempre exibidos no detalhe, mesmo vazios. */
 const DETAIL_ALWAYS = {
-  fornecedores: ['nome', 'cnpj', 'localizacao'],
+  fornecedores: ['razao_social', 'nome_fantasia', 'cnpj', 'localizacao'],
   materiais: ['nome'],
-  locais: ['nome', 'descricao'],
+  locais: ['nome', 'descricao', 'area'],
   garantias: ['nome', 'prazo_valor', 'data_fim', 'motivos_perda_garantia', 'descricao', 'telefone'],
 };
 
@@ -67,10 +74,10 @@ const DETAIL_ALWAYS = {
 const CONFIG = {
   fornecedores: {
     title: 'Fornecedores',
-    fields: ['nome', 'cnpj', 'contato', 'telefone', 'telefone1', 'telefone2', 'localizacao'],
+    fields: ['razao_social', 'nome_fantasia', 'cnpj', 'contato', 'telefone', 'telefone1', 'telefone2', 'localizacao'],
     path: '/fornecedores',
     createTitle: 'Novo fornecedor',
-    searchHint: 'Pesquisar por nome, CNPJ, telefone…',
+    searchHint: 'Pesquisar por razão social, nome fantasia, CNPJ, telefone…',
   },
   materiais: {
     title: 'Materiais',
@@ -81,7 +88,7 @@ const CONFIG = {
   },
   locais: {
     title: 'Locais',
-    fields: ['nome', 'descricao'],
+    fields: ['nome', 'descricao', 'area'],
     path: '/locais',
     createTitle: 'Novo local',
     searchHint: 'Pesquisar local…',
@@ -107,28 +114,124 @@ function formatPrazo(valor, unidade) {
   return `${valor} ${u}`;
 }
 
+function isMissingColumnError(error) {
+  const code = String(error?.code || '');
+  const msg = String(error?.message || error?.details || '');
+  return code === 'PGRST204'
+    || /schema cache/i.test(msg)
+    || /could not find the '[^']+' column/i.test(msg)
+    || /column .+ does not exist/i.test(msg);
+}
+
+function columnNameFromError(error) {
+  const msg = String(error?.message || error?.details || '');
+  const match = msg.match(/'([a-z0-9_]+)' column/i) || msg.match(/column\s+"([a-z0-9_]+)"/i);
+  return match?.[1] || '';
+}
+
+async function insertCatalogRow(table, payload) {
+  const optional = table === 'fornecedores'
+    ? ['razao_social', 'nome_fantasia', 'telefone1', 'telefone2', 'localizacao', 'contato', 'logo_path']
+    : table === 'garantias'
+      ? ['telefone', 'prazo_valor', 'prazo_unidade', 'data_fim', 'motivos_perda_garantia']
+      : table === 'locais'
+        ? ['area']
+        : [];
+  const body = { ...payload };
+  let lastError = null;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const { data, error } = await supabase.from(table).insert(body).select('id').maybeSingle();
+    if (!error || data?.id) return data;
+    lastError = error;
+    if (!isMissingColumnError(error)) throw error;
+    const col = columnNameFromError(error);
+    if (col && Object.prototype.hasOwnProperty.call(body, col)) {
+      delete body[col];
+      continue;
+    }
+    const next = optional.find((key) => Object.prototype.hasOwnProperty.call(body, key));
+    if (!next) throw error;
+    delete body[next];
+  }
+  throw lastError || new Error('Não foi possível salvar.');
+}
+
 function relatedNome(rel) {
   if (!rel) return '';
   const row = Array.isArray(rel) ? rel[0] : rel;
   return row?.nome || '';
 }
 
-function listSubtitle(table, row) {
-  if (table === 'fornecedores') {
-    return [row.cnpj, row.telefone1 || row.telefone, row.localizacao].filter(Boolean).join(' · ');
-  }
+async function withLogoUrls(rows) {
+  return Promise.all((rows || []).map(async (row) => {
+    if (!row?.logo_path) return { ...row, logoUrl: '' };
+    try {
+      const { data } = await publicOrSignedUrl(row.logo_path);
+      return { ...row, logoUrl: data?.signedUrl || '' };
+    } catch {
+      return { ...row, logoUrl: '' };
+    }
+  }));
+}
+
+function fornecedorTags(row) {
+  if (!row) return [];
+  const phones = [...new Set([row.telefone1, row.telefone, row.telefone2].filter(Boolean))];
+  return [
+    row.contato ? { key: 'contato', icon: 'user', label: row.contato } : null,
+    ...phones.map((phone, index) => ({ key: `tel-${index}`, icon: 'phone', label: formatTelefone(phone) || phone })),
+    row.localizacao ? { key: 'loc', icon: 'map', label: row.localizacao } : null,
+  ].filter(Boolean);
+}
+
+function catalogTags(table, row) {
+  if (!row) return [];
+  if (table === 'fornecedores') return fornecedorTags(row);
   if (table === 'materiais') {
-    return relatedNome(row.fornecedores) || '';
+    const forn = relatedNome(row.fornecedores);
+    return forn ? [{ key: 'forn', icon: 'box', label: forn }] : [];
   }
   if (table === 'locais') {
     const desc = String(row.descricao || '').trim();
-    if (!desc) return '';
-    return desc.length > 80 ? `${desc.slice(0, 80)}…` : desc;
+    const area = AREA_LOCAL[row.area] || '';
+    return [
+      area ? { key: 'area', icon: row.area === 'privativa' ? 'home' : 'building', label: area } : null,
+      desc ? {
+        key: 'desc',
+        icon: iconForLocal(row.nome, row.descricao),
+        label: desc.length > 72 ? `${desc.slice(0, 72)}…` : desc,
+      } : null,
+    ].filter(Boolean);
   }
   if (table === 'garantias') {
     const prazo = formatPrazo(row.prazo_valor, row.prazo_unidade);
-    const fim = row.data_fim ? `até ${formatDate(row.data_fim)}` : '';
-    return [prazo, fim].filter(Boolean).join(' · ');
+    return [
+      prazo ? { key: 'prazo', icon: 'shield', label: prazo } : null,
+      row.data_fim ? { key: 'fim', icon: 'calendar', label: `até ${formatDate(row.data_fim)}` } : null,
+      row.telefone ? { key: 'tel', icon: 'phone', label: formatTelefone(row.telefone) || row.telefone } : null,
+    ].filter(Boolean);
+  }
+  return [];
+}
+
+function listTitle(table, row) {
+  if (!row) return '';
+  if (table === 'fornecedores') return row.nome_fantasia || row.nome || 'Sem nome';
+  return row.nome || 'Sem nome';
+}
+
+function listSubtitle(table, row) {
+  if (!row) return '';
+  if (table === 'fornecedores') {
+    return formatCnpj(row.cnpj) || '';
+  }
+  if (table === 'locais') {
+    return AREA_LOCAL[row.area] || '';
+  }
+  if (table === 'garantias') {
+    const desc = String(row.descricao || '').trim();
+    if (!desc) return '';
+    return desc.length > 72 ? `${desc.slice(0, 72)}…` : desc;
   }
   return '';
 }
@@ -145,6 +248,12 @@ function detailFieldsFor(table, row) {
       return null;
     } else if (key === 'data_fim') {
       value = value ? formatDate(value) : '';
+    } else if (key === 'cnpj') {
+      value = formatCnpj(value) || '';
+    } else if (key === 'area') {
+      value = AREA_LOCAL[value] || '';
+    } else if (String(key).startsWith('telefone')) {
+      value = formatTelefone(value) || '';
     } else if (value == null || value === '') {
       value = '';
     } else {
@@ -160,6 +269,22 @@ function selectFor(table) {
     return '*, fornecedores:fornecedor_id(id, nome)';
   }
   return '*';
+}
+
+function parseCatalogLink(to) {
+  const match = String(to || '').match(/^\/(fornecedores|materiais|locais|garantias)\/([^/?#]+)/);
+  if (!match) return null;
+  return { table: match[1], id: match[2] };
+}
+
+async function loadCatalogRow(tableName, id) {
+  const { data, error } = await supabase.from(tableName).select(selectFor(tableName)).eq('id', id).single();
+  if (error) throw error;
+  if (tableName === 'fornecedores') {
+    const [withLogo] = await withLogoUrls([data]);
+    return withLogo;
+  }
+  return data;
 }
 
 async function loadRelatedGroups(table, id) {
@@ -281,7 +406,7 @@ async function loadRelatedGroups(table, id) {
         .map((row) => {
           const l = Array.isArray(row.locais) ? row.locais[0] : row.locais;
           if (!l?.id) return null;
-          return { id: l.id, nome: l.nome, to: `/locais/${l.id}` };
+          return { id: l.id, nome: l.nome, to: `/locais/${l.id}`, icon: iconForLocal(l.nome) };
         })
         .filter(Boolean),
     });
@@ -393,7 +518,7 @@ async function linkMaterialRelations({ materialId, fornecedorId, localIds = [], 
   }
 }
 
-function MultiCheck({ label, options, values, onChange }) {
+function MultiCheck({ label, options, values, onChange, withLocalIcons = false }) {
   if (!options.length) {
     return (
       <Field label={label}>
@@ -419,6 +544,11 @@ function MultiCheck({ label, options, values, onChange }) {
                   );
                 }}
               />
+              {withLocalIcons ? (
+                <div className="catalog-multi-icon" aria-hidden="true">
+                  <Icon name={iconForLocal(opt.nome)} size={16} />
+                </div>
+              ) : null}
               <span>{opt.nome}</span>
             </label>
           );
@@ -432,6 +562,11 @@ function RelatedItemButton({ item, onOpenRelated }) {
   const clickable = Boolean(item?.to);
   const content = (
     <>
+      {item.icon ? (
+        <span className="catalog-related-icon" aria-hidden="true">
+          <Icon name={item.icon} size={18} />
+        </span>
+      ) : null}
       <span className="catalog-related-text">
         <span className="catalog-related-name">{item.nome || 'Sem nome'}</span>
         {item.sub ? <span className="catalog-related-sub">{item.sub}</span> : null}
@@ -449,9 +584,18 @@ function RelatedItemButton({ item, onOpenRelated }) {
   );
 }
 
-function CatalogDetailView({ fields, relatedGroups, onOpenRelated }) {
+function CatalogDetailView({ fields, relatedGroups, onOpenRelated, logoUrl, iconName }) {
   return (
     <div className="catalog-detail">
+      {logoUrl ? (
+        <div className="forn-detail-logo">
+          <img src={logoUrl} alt="" />
+        </div>
+      ) : iconName ? (
+        <div className="local-detail-icon" aria-hidden="true">
+          <Icon name={iconName} size={32} />
+        </div>
+      ) : null}
       {fields?.length ? (
         <dl className="catalog-detail-fields">
           {fields.map((item) => (
@@ -504,8 +648,55 @@ function CatalogDetailView({ fields, relatedGroups, onOpenRelated }) {
 
 function FormField({ table, col, form, setForm }) {
   const label = labelOf(col, table);
-  const required = col === 'nome';
+  const required = col === 'nome' || col === 'razao_social' || col === 'nome_fantasia';
   const placeholder = FIELD_PLACEHOLDERS[table]?.[col];
+  const setValue = (value) => setForm({ ...form, [col]: value });
+
+  if (table === 'locais' && col === 'nome') {
+    return (
+      <Field label={label}>
+        <div className="local-name-field">
+          <div className="local-name-icon" aria-hidden="true">
+            <Icon name={iconForLocal(form.nome, form.descricao)} size={20} />
+          </div>
+          <input
+            value={form.nome || ''}
+            onChange={(e) => setForm({ ...form, nome: e.target.value })}
+            required={required}
+            placeholder={placeholder}
+          />
+        </div>
+      </Field>
+    );
+  }
+
+  if (table === 'locais' && col === 'area') {
+    return (
+      <Field label="Área">
+        <div className="area-local-options">
+          {[
+            { id: 'privativa', hint: 'Itens deste local só aparecem para moradores.' },
+            { id: 'comum', hint: 'Itens deste local só aparecem para a Administração do condomínio.' },
+          ].map((opt) => (
+            <label key={opt.id} className={`area-local-option${form.area === opt.id ? ' is-on' : ''}`}>
+              <input
+                type="radio"
+                name="local-area"
+                value={opt.id}
+                checked={form.area === opt.id}
+                onChange={() => setForm({ ...form, area: opt.id })}
+                required
+              />
+              <span>
+                <strong>{AREA_LOCAL[opt.id]}</strong>
+                <small>{opt.hint}</small>
+              </span>
+            </label>
+          ))}
+        </div>
+      </Field>
+    );
+  }
 
   if (col === 'prazo_unidade') {
     return (
@@ -554,7 +745,33 @@ function FormField({ table, col, form, setForm }) {
       <Field label={label}>
         <textarea
           value={form[col] || ''}
-          onChange={(e) => setForm({ ...form, [col]: e.target.value })}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder={placeholder}
+        />
+      </Field>
+    );
+  }
+
+  if (col === 'cnpj') {
+    return (
+      <Field label={label}>
+        <MaskedInput
+          mask="cnpj"
+          value={form[col] || ''}
+          onChange={setValue}
+          placeholder={placeholder}
+        />
+      </Field>
+    );
+  }
+
+  if (String(col).startsWith('telefone')) {
+    return (
+      <Field label={label}>
+        <MaskedInput
+          mask="telefone"
+          value={form[col] || ''}
+          onChange={setValue}
           placeholder={placeholder}
         />
       </Field>
@@ -565,7 +782,7 @@ function FormField({ table, col, form, setForm }) {
     <Field label={label}>
       <input
         value={form[col] || ''}
-        onChange={(e) => setForm({ ...form, [col]: e.target.value })}
+        onChange={(e) => setValue(e.target.value)}
         required={required}
         placeholder={placeholder}
       />
@@ -574,8 +791,7 @@ function FormField({ table, col, form, setForm }) {
 }
 
 export function CatalogList({ table }) {
-  const navigate = useNavigate();
-  const { condoId } = useSession();
+  const { condoId, session } = useSession();
   const cfg = CONFIG[table];
   const [rows, setRows] = useState([]);
   const [options, setOptions] = useState({
@@ -586,6 +802,7 @@ export function CatalogList({ table }) {
   });
   const [q, setQ] = useState('');
   const [form, setForm] = useState({});
+  const [logoFile, setLogoFile] = useState(null);
   const [links, setLinks] = useState({
     fornecedorId: '',
     materialIds: [],
@@ -593,7 +810,10 @@ export function CatalogList({ table }) {
     garantiaIds: [],
   });
   const [error, setError] = useState('');
-  const [selected, setSelected] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const [detail, setDetail] = useState(null);
+  const [detailStack, setDetailStack] = useState([]);
   const [relatedGroups, setRelatedGroups] = useState([]);
   const { editable, editing, showEditButton, canRole, toggleEditing } = useEditTela('manage_catalog');
 
@@ -604,7 +824,7 @@ export function CatalogList({ table }) {
       .eq('condominio_id', condoId)
       .order('nome');
     if (err) setError(err.message);
-    setRows(data || []);
+    setRows(table === 'fornecedores' ? await withLogoUrls(data || []) : (data || []));
   }
 
   async function loadOptions() {
@@ -629,19 +849,22 @@ export function CatalogList({ table }) {
   }, [condoId, table]);
 
   useEffect(() => {
-    if (!selected?.id) {
+    if (!detail?.row?.id) {
       setRelatedGroups([]);
       return undefined;
     }
     let cancelled = false;
-    loadRelatedGroups(table, selected.id).then((groups) => {
+    loadRelatedGroups(detail.table, detail.row.id).then((groups) => {
       if (!cancelled) setRelatedGroups(groups);
     });
     return () => { cancelled = true; };
-  }, [selected?.id, table]);
+  }, [detail?.row?.id, detail?.table]);
 
   async function add(e) {
     e.preventDefault();
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
     setError('');
     try {
       const payload = { condominio_id: condoId };
@@ -655,19 +878,35 @@ export function CatalogList({ table }) {
         payload[col] = raw;
       }
 
-      if (table === 'locais') payload.tipo = 'outro';
+      if (table === 'locais') {
+        payload.tipo = tipoForLocal(form.nome, form.descricao);
+        payload.area = areaForLocal(form.nome, form.descricao, form.area);
+        if (!form.area) throw new Error('Informe se o local é área privativa ou área comum.');
+      }
       if (table === 'materiais' && links.fornecedorId) {
         payload.fornecedor_id = links.fornecedorId;
       }
-      if (table === 'fornecedores' && payload.cnpj != null) {
-        payload.cnpj = normalizarCnpj(payload.cnpj);
+      if (table === 'fornecedores') {
+        const razao = String(form.razao_social || '').trim();
+        const fantasia = String(form.nome_fantasia || '').trim();
+        if (!razao) throw new Error('Informe a razão social.');
+        if (!fantasia) throw new Error('Informe o nome fantasia.');
+        payload.razao_social = razao;
+        payload.nome_fantasia = fantasia;
+        payload.nome = fantasia;
+        if (payload.cnpj != null) payload.cnpj = normalizarCnpj(payload.cnpj);
+        for (const key of ['telefone', 'telefone1', 'telefone2']) {
+          if (payload[key]) payload[key] = formatTelefone(payload[key]);
+        }
       }
       if (table === 'garantias' && payload.prazo_valor != null && payload.prazo_valor !== '') {
         payload.prazo_valor = Number(payload.prazo_valor);
       }
+      if (table === 'garantias' && payload.telefone) {
+        payload.telefone = formatTelefone(payload.telefone);
+      }
 
-      const { data, error: err } = await supabase.from(table).insert(payload).select('id').single();
-      if (err) throw err;
+      const data = await insertCatalogRow(table, payload);
       const newId = data?.id;
 
       if (table === 'materiais' && newId) {
@@ -723,46 +962,127 @@ export function CatalogList({ table }) {
             'fornecedor_id,garantia_id',
           );
         }
+        if (logoFile) {
+          await salvarLogoFornecedor({
+            condominioId: condoId,
+            userId: session.user.id,
+            fornecedorId: newId,
+            file: logoFile,
+          });
+        }
       }
 
       setForm({});
+      setLogoFile(null);
       setLinks({ fornecedorId: '', materialIds: [], localIds: [], garantiaIds: [] });
       await Promise.all([load(), loadOptions()]);
     } catch (err) {
       setError(err.message || 'Não foi possível salvar.');
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
     }
   }
 
   const filtered = rows.filter((row) => JSON.stringify(row).toLowerCase().includes(q.toLowerCase()));
-  const detailFields = selected ? detailFieldsFor(table, selected) : [];
+  const selected = detail?.row || null;
+  const detailTable = detail?.table || table;
+  const detailFields = selected ? detailFieldsFor(detailTable, selected) : [];
 
-  function openRelated(item) {
-    if (!item?.to) return;
-    setSelected(null);
-    navigate(item.to);
+  function openRecord(row) {
+    setDetailStack([]);
+    setDetail({ table, row });
+  }
+
+  async function openRelated(item) {
+    const link = parseCatalogLink(item?.to);
+    if (!link) return;
+    try {
+      setError('');
+      const row = await loadCatalogRow(link.table, link.id);
+      setDetailStack((stack) => (detail ? [...stack, detail] : stack));
+      setDetail({ table: link.table, row });
+    } catch (err) {
+      setError(err.message || 'Não foi possível abrir o registro.');
+    }
+  }
+
+  function closeDetail() {
+    if (detailStack.length) {
+      const prev = detailStack[detailStack.length - 1];
+      setDetailStack(detailStack.slice(0, -1));
+      setDetail(prev);
+      return;
+    }
+    setDetail(null);
   }
 
   return (
     <Page
       title={cfg.title}
+      search={{
+        value: q,
+        onChange: setQ,
+        placeholder: cfg.searchHint || 'Procurar registro…',
+      }}
       actions={showEditButton ? <EditTelaButton editing={editing} onToggle={toggleEditing} /> : null}
     >
       <Alert error={error} />
-      <input placeholder={cfg.searchHint || 'Pesquisar'} value={q} onChange={(e) => setQ(e.target.value)} />
-      <DataList
-        rows={filtered}
-        empty="Nenhum registro."
-        getTitle={(row) => row.nome || 'Sem nome'}
-        getSubtitle={(row) => listSubtitle(table, row)}
-        onSelect={setSelected}
-      />
+      <div className="catalog-list">
+        <DataList
+          rows={filtered}
+          empty={q ? 'Nenhum registro encontrado.' : 'Nenhum registro.'}
+          getTitle={(row) => listTitle(table, row)}
+          getSubtitle={(row) => listSubtitle(table, row)}
+          getLeading={table === 'fornecedores'
+            ? (row) => (row.logoUrl
+              ? <img src={row.logoUrl} alt="" />
+              : <Icon name="box" size={18} />)
+            : table === 'locais'
+              ? (row) => <Icon name={iconForLocal(row.nome, row.descricao)} size={20} />
+              : undefined}
+          getTags={(row) => catalogTags(table, row)}
+          onSelect={openRecord}
+        />
+      </div>
 
       {editable ? (
         <form className="panel stack catalog-form" onSubmit={add}>
           <h2>{cfg.createTitle}</h2>
-          {cfg.fields.map((col) => (
-            <FormField key={col} table={table} col={col} form={form} setForm={setForm} />
-          ))}
+          {table === 'fornecedores' ? (
+            <>
+              <div className="catalog-form-grid">
+                <FormField table={table} col="razao_social" form={form} setForm={setForm} />
+                <FormField table={table} col="nome_fantasia" form={form} setForm={setForm} />
+              </div>
+              {['cnpj', 'contato', 'telefone'].map((col) => (
+                <FormField key={col} table={table} col={col} form={form} setForm={setForm} />
+              ))}
+              <div className="catalog-form-grid">
+                <FormField table={table} col="telefone1" form={form} setForm={setForm} />
+                <FormField table={table} col="telefone2" form={form} setForm={setForm} />
+              </div>
+              <FormField table={table} col="localizacao" form={form} setForm={setForm} />
+            </>
+          ) : (
+            cfg.fields.map((col) => (
+              <FormField key={col} table={table} col={col} form={form} setForm={setForm} />
+            ))
+          )}
+          {table === 'fornecedores' ? (
+            <div className="field">
+              <span>Logo da empresa</span>
+              <label className="catalog-file-pick">
+                {logoFile ? 'Trocar logo' : 'Enviar logo'}
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/*"
+                  onChange={(e) => setLogoFile(e.target.files?.[0] || null)}
+                />
+              </label>
+              {logoFile ? <span className="hint catalog-file-name">{logoFile.name}</span> : null}
+            </div>
+          ) : null}
 
           {table === 'materiais' ? (
             <>
@@ -788,6 +1108,7 @@ export function CatalogList({ table }) {
                 options={options.locais}
                 values={links.localIds}
                 onChange={(localIds) => setLinks({ ...links, localIds })}
+                withLocalIcons
               />
             </>
           ) : null}
@@ -840,7 +1161,7 @@ export function CatalogList({ table }) {
             </>
           ) : null}
 
-          <Btn type="submit" icon="check">Salvar</Btn>
+          <Btn type="submit" icon="check" disabled={saving}>{saving ? 'Salvando…' : 'Salvar'}</Btn>
         </form>
       ) : !canRole ? (
         <p className="hint" style={{ marginTop: 16 }}>
@@ -850,14 +1171,16 @@ export function CatalogList({ table }) {
 
       <Modal
         open={Boolean(selected)}
-        title={selected?.nome || cfg.title}
-        onClose={() => setSelected(null)}
+        title={listTitle(detailTable, selected) || CONFIG[detailTable]?.title || cfg.title}
+        onClose={closeDetail}
         className="modal-sheet--catalog"
       >
         <CatalogDetailView
           fields={detailFields}
           relatedGroups={relatedGroups}
           onOpenRelated={openRelated}
+          logoUrl={selected?.logoUrl}
+          iconName={detailTable === 'locais' ? iconForLocal(selected?.nome, selected?.descricao) : ''}
         />
       </Modal>
     </Page>
@@ -867,34 +1190,43 @@ export function CatalogList({ table }) {
 export function CatalogDetail({ table }) {
   const { id } = useParams();
   const navigate = useNavigate();
+  const cfg = CONFIG[table];
   const [row, setRow] = useState(null);
   const [relatedGroups, setRelatedGroups] = useState([]);
   const [error, setError] = useState('');
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
-      const { data, error: err } = await supabase.from(table).select('*').eq('id', id).single();
-      if (err) return setError(err.message);
-      setRow(data);
-      setRelatedGroups(await loadRelatedGroups(table, id));
+      try {
+        const data = await loadCatalogRow(table, id);
+        if (cancelled) return;
+        setRow(data);
+        setRelatedGroups(await loadRelatedGroups(table, id));
+      } catch (err) {
+        if (!cancelled) setError(err.message || 'Não foi possível abrir o registro.');
+      }
     })();
+    return () => { cancelled = true; };
   }, [id, table]);
 
-  if (!row) return <Page title="Detalhe"><Alert error={error} /></Page>;
-
   return (
-    <Page title={row.nome}>
+    <Page title={cfg.title}>
       <Alert error={error} />
-      <CatalogDetailView
-        fields={detailFieldsFor(table, row)}
-        relatedGroups={relatedGroups}
-        onOpenRelated={(item) => item?.to && navigate(item.to)}
-      />
-      <div style={{ marginTop: 16 }}>
-        <Btn variant="ghost" onClick={() => navigate(CONFIG[table].path)}>
-          Voltar à lista
-        </Btn>
-      </div>
+      <Modal
+        open={Boolean(row)}
+        title={listTitle(table, row) || cfg.title}
+        onClose={() => navigate(cfg.path)}
+        className="modal-sheet--catalog"
+      >
+        <CatalogDetailView
+          fields={detailFieldsFor(table, row)}
+          relatedGroups={relatedGroups}
+          onOpenRelated={(item) => item?.to && navigate(item.to)}
+          logoUrl={row?.logoUrl}
+          iconName={table === 'locais' ? iconForLocal(row?.nome, row?.descricao) : ''}
+        />
+      </Modal>
     </Page>
   );
 }

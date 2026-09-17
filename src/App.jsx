@@ -1,5 +1,6 @@
 import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 import { useSession } from './lib/session';
+import { ehCargoConstrutora } from './lib/permissions';
 import { Shell } from './components/Shell';
 import { LoginPage } from './pages/Login';
 import { SecoesPage } from './pages/Secoes';
@@ -14,18 +15,38 @@ import { AgendarVisitaPage } from './pages/AgendarVisita';
 import { LaudoDetalhePage, LaudoNovoPage, LaudosPage } from './pages/Laudos';
 import { UsuariosPage } from './pages/Admin';
 import { CondominiosPortal } from './pages/Condominios';
+import { ConstrutorasPortal, ConstrutoraPortal } from './pages/Construtoras';
+import { ConstrutoraCondoPage } from './pages/ConstrutoraCondo';
 import { ConvitePage } from './pages/Convite';
 import { SuportePage } from './pages/Suporte';
 import { LaudosGlobaisPage } from './pages/LaudosGlobais';
+import { GestaoTecnicaUsuariosPage } from './pages/GestaoTecnicaUsuarios';
 import { ConfiguracoesPage, NotificacoesPage, OnboardingPreferencias } from './pages/Sistema';
+import { GovernancaTecnicaPage } from './pages/GovernancaTecnica';
 import { Alert, Page } from './components/ui';
 
 function HomeRedirect() {
+  const { cargoTipo } = useSession();
+  if (ehCargoConstrutora(cargoTipo)) return <Navigate to="/governanca-tecnica" replace />;
   return <Navigate to="/visao-geral" replace />;
 }
 
+function VisaoGeralRoute() {
+  const { cargoTipo } = useSession();
+  if (ehCargoConstrutora(cargoTipo)) {
+    return (
+      <SecoesPage
+        table="visao_geral_secoes"
+        title="Números dos chamados"
+        lead="Totais de chamados, manutenções e laudos do condomínio."
+      />
+    );
+  }
+  return <SecoesPage table="visao_geral_secoes" title="Visão geral" cover="visao" hero />;
+}
+
 function Guard({ children }) {
-  const { configured, loading, session, membership, isGestaoTecnica, error, needsPreferencias } = useSession();
+  const { configured, loading, session, membership, cargoTipo, isGestaoTecnica, isAdminSistema, isConstrutoraOrg, condoId, error, needsPreferencias } = useSession();
   const { pathname } = useLocation();
   if (!configured) {
     return (
@@ -46,9 +67,11 @@ function Guard({ children }) {
     return <OnboardingPreferencias />;
   }
   if (!isGestaoTecnica && (
-    pathname.startsWith('/condominios')
+    pathname.startsWith('/construtoras')
+    || (pathname.startsWith('/condominios') && !isConstrutoraOrg)
     || pathname.startsWith('/suporte')
-    || pathname.startsWith('/laudos-globais')
+    || (pathname.startsWith('/laudos-globais') && !isConstrutoraOrg)
+    || pathname.startsWith('/gestao-tecnica')
     || pathname.startsWith('/rastreabilidade')
     || pathname.startsWith('/agendar-visita')
     || pathname.startsWith('/relatorio')
@@ -56,7 +79,43 @@ function Guard({ children }) {
   )) {
     return <Navigate to="/" replace />;
   }
-  if (!isGestaoTecnica && !membership) {
+  if (pathname.startsWith('/gestao-tecnica') && !isAdminSistema) {
+    return <Navigate to="/" replace />;
+  }
+  if (ehCargoConstrutora(cargoTipo)) {
+    const laudoMatch = pathname.match(/^\/laudos\/([^/]+)$/);
+    if (isConstrutoraOrg && pathname.startsWith('/governanca-tecnica')) {
+      const id = pathname.split('/')[2];
+      if (condoId) {
+        return <Navigate to={id ? `/construtora/${condoId}/governanca/${id}` : `/construtora/${condoId}`} replace />;
+      }
+      return <Navigate to="/" replace />;
+    }
+    if (laudoMatch && laudoMatch[1] !== 'novo') {
+      return <Navigate to={`/governanca-tecnica/${laudoMatch[1]}`} replace />;
+    }
+    const permitida = isConstrutoraOrg ? (
+      pathname === '/'
+      || pathname === '/painel'
+      || pathname.startsWith('/construtora')
+      || pathname.startsWith('/laudos-globais')
+      || pathname.startsWith('/condominios')
+      || pathname.startsWith('/configuracoes')
+      || pathname.startsWith('/notificacoes')
+    ) : (
+      pathname === '/'
+      || pathname === '/painel'
+      || pathname.startsWith('/governanca-tecnica')
+      || pathname.startsWith('/visao-geral')
+      || pathname.startsWith('/manutencao')
+      || pathname.startsWith('/configuracoes')
+      || pathname.startsWith('/notificacoes')
+    );
+    if (!permitida) {
+      return <Navigate to={isConstrutoraOrg ? '/' : '/governanca-tecnica'} replace />;
+    }
+  }
+  if (!isGestaoTecnica && !isConstrutoraOrg && !membership) {
     return (
       <Page title="Sem condomínio">
         <Alert error={error || 'Seu usuário ainda não está vinculado a um condomínio. Peça à Gestão Técnica para criar o empreendimento e o vínculo.'} />
@@ -67,16 +126,28 @@ function Guard({ children }) {
 }
 
 function AppLayout() {
-  const { isGestaoTecnica, condoId } = useSession();
+  const { isGestaoTecnica, isConstrutoraOrg, condoId } = useSession();
   const { pathname } = useLocation();
   if (isGestaoTecnica && (pathname === '/' || pathname.startsWith('/condominios'))) {
     return <CondominiosPortal />;
   }
+  if (isGestaoTecnica && pathname.startsWith('/construtoras')) {
+    return <ConstrutorasPortal />;
+  }
+  if (isConstrutoraOrg && (pathname === '/' || pathname.startsWith('/condominios'))) {
+    return <ConstrutoraPortal />;
+  }
+  if (isConstrutoraOrg && pathname.startsWith('/construtora')) {
+    return <Outlet />;
+  }
   if (
-    isGestaoTecnica
+    (isGestaoTecnica || isConstrutoraOrg)
     && (
-      pathname.startsWith('/suporte')
-      || pathname.startsWith('/laudos-globais')
+      pathname.startsWith('/laudos-globais')
+      || (isGestaoTecnica && (
+        pathname.startsWith('/suporte')
+        || pathname.startsWith('/gestao-tecnica')
+      ))
       || (pathname.startsWith('/notificacoes') && !condoId)
       || (pathname.startsWith('/configuracoes') && !condoId)
     )
@@ -102,8 +173,8 @@ export default function App() {
       >
         <Route index element={<HomeRedirect />} />
         <Route path="painel" element={<Navigate to="/visao-geral" replace />} />
-        <Route path="visao-geral" element={<SecoesPage table="visao_geral_secoes" title="Visão geral" cover="visao" hero />} />
-        <Route path="empreendimento" element={<SecoesPage table="empreendimento_secoes" title="Sobre o empreendimento" cover="visao" hero />} />
+        <Route path="visao-geral" element={<VisaoGeralRoute />} />
+        <Route path="empreendimento" element={<Navigate to="/visao-geral" replace />} />
         <Route path="sobre-nos" element={<SecoesPage table="sobre_nos" title="Sobre nós" lead="Blocos institucionais." />} />
         <Route path="documentos" element={<DocumentosPage />} />
         <Route path="boletins" element={<BoletinsPage />} />
@@ -117,6 +188,7 @@ export default function App() {
         <Route path="garantias" element={<CatalogList table="garantias" />} />
         <Route path="garantias/:id" element={<CatalogDetail table="garantias" />} />
         <Route path="manutencao" element={<ManutencaoPage />} />
+        <Route path="assistencia-tecnica" element={<ChamadosPage />} />
         <Route path="chamados" element={<ChamadosPage />} />
         <Route path="chamados/novo" element={<ChamadoNovoPage />} />
         <Route path="chamados/:id" element={<ChamadoDetalhePage />} />
@@ -128,11 +200,18 @@ export default function App() {
         <Route path="laudos" element={<LaudosPage />} />
         <Route path="laudos/novo" element={<LaudoNovoPage />} />
         <Route path="laudos/:id" element={<LaudoDetalhePage />} />
+        <Route path="governanca-tecnica" element={<GovernancaTecnicaPage />} />
+        <Route path="governanca-tecnica/:id" element={<GovernancaTecnicaPage />} />
+        <Route path="construtora/:condoId" element={<ConstrutoraCondoPage />} />
+        <Route path="construtora/:condoId/ocorrencias/:chamadoId" element={<ConstrutoraCondoPage />} />
+        <Route path="construtora/:condoId/governanca/:laudoId" element={<ConstrutoraCondoPage />} />
         <Route path="condominios" element={<CondominiosPortal />} />
+        <Route path="construtoras" element={<ConstrutorasPortal />} />
         <Route path="suporte" element={<SuportePage />} />
         <Route path="suporte/:id" element={<SuportePage />} />
         <Route path="laudos-globais" element={<LaudosGlobaisPage />} />
         <Route path="laudos-globais/:id" element={<LaudosGlobaisPage />} />
+        <Route path="gestao-tecnica" element={<GestaoTecnicaUsuariosPage />} />
         <Route path="configuracoes" element={<ConfiguracoesPage />} />
         <Route path="notificacoes" element={<NotificacoesPage />} />
         <Route path="usuarios" element={<UsuariosPage />} />

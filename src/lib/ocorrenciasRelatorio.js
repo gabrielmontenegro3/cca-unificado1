@@ -1,5 +1,6 @@
 import html2canvas from 'html2canvas';
-import { formatDate } from './format';
+import { formatDate, labelUnidade } from './format';
+import { ehChamadoAdministracao, ehUnidadeAreasComuns } from './permissions';
 import { buildTimeline, eventoEhInspecaoAgendada } from './chamadoRastreabilidade';
 import {
   listarChamadosCondominio,
@@ -31,11 +32,11 @@ export function endOfDay(dateStr) {
 }
 
 export function chamadoEhUnidade(chamado) {
-  return Boolean(chamado?.unidade_id);
+  return Boolean(chamado?.unidade_id) && !chamadoEhAreaComum(chamado);
 }
 
 export function chamadoEhAreaComum(chamado) {
-  return !chamado?.unidade_id;
+  return !chamado?.unidade_id || ehChamadoAdministracao(chamado) || ehUnidadeAreasComuns(chamado?.unidades);
 }
 
 export function ocorrenciaConcluida(chamado) {
@@ -67,7 +68,8 @@ export function flattenTimeline(items) {
 }
 
 export function localChamado(chamado) {
-  if (chamado?.unidades?.identificacao) return chamado.unidades.identificacao;
+  const unidade = labelUnidade(chamado?.unidades);
+  if (unidade) return unidade;
   if (chamado?.locais?.nome) return chamado.locais.nome;
   return chamadoEhAreaComum(chamado) ? 'Área comum' : 'Unidade';
 }

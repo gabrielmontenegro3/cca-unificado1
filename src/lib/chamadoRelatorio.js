@@ -1,6 +1,6 @@
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
-import { chamadoNumero, formatDateTime } from './format';
+import { chamadoNumero, formatDateTime, labelUnidade } from './format';
 import { tipoLabelEvento, tituloRastreabilidade } from './chamadoRastreabilidade';
 import { STATUS_LABEL } from './permissions';
 import { arquivoEhImagem, publicOrSignedUrl } from './api';
@@ -109,7 +109,7 @@ function reportCss() {
       padding: 28px 32px 36px;
       background: #f3eee6;
       color: #1d1915;
-      font-family: "DM Sans", "Segoe UI", system-ui, sans-serif;
+      font-family: Outfit, "Segoe UI", system-ui, sans-serif;
       font-size: 13px;
       line-height: 1.45;
     }
@@ -122,9 +122,9 @@ function reportCss() {
       margin: 0 0 6px;
     }
     h1 {
-      font-family: Fraunces, Palatino, Georgia, serif;
+      font-family: Outfit, "Segoe UI", sans-serif;
       font-size: 30px;
-      font-weight: 600;
+      font-weight: 400;
       letter-spacing: -0.02em;
       margin: 0 0 4px;
     }
@@ -255,7 +255,7 @@ function reportHtml({ chamado, timeline, inspecoes }) {
       <section class="summary">
         <div class="grid">
           <div><span class="label">Solicitante</span><strong>${esc(chamado?.usuarios?.nome || '—')}</strong></div>
-          <div><span class="label">Unidade</span><strong>${esc(chamado?.unidades?.identificacao || '—')}</strong></div>
+          <div><span class="label">Unidade</span><strong>${esc(labelUnidade(chamado?.unidades, '—'))}</strong></div>
           <div><span class="label">Abertura</span><strong>${esc(formatDateTime(chamado?.created_at))}</strong></div>
           <div><span class="label">Status</span><strong>${esc(STATUS_LABEL[chamado?.status] || chamado?.status || '—')}</strong></div>
         </div>

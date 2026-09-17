@@ -22,6 +22,7 @@ CREATE POLICY bol_select ON public.boletins_informativos
     public.user_belongs_to_condominio(condominio_id)
     AND (
       publicado IS TRUE
+      OR autor_id = auth.uid()
       OR public.user_is_gestao(condominio_id)
       OR public.user_is_gestao_tecnica()
     )
@@ -30,7 +31,7 @@ CREATE POLICY bol_select ON public.boletins_informativos
 CREATE POLICY bol_insert ON public.boletins_informativos
   FOR INSERT TO authenticated
   WITH CHECK (
-    autor_id = auth.uid()
+    (autor_id IS NULL OR autor_id = auth.uid())
     AND (
       public.user_is_gestao_tecnica()
       OR public.user_is_gestao(condominio_id)
