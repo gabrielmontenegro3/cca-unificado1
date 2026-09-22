@@ -358,7 +358,7 @@ export function SuportePage() {
           </label>
         </div>
 
-        <div className="suporte-layout">
+        <div className={`suporte-layout suporte-layout--mobile-nav${id ? ' suporte-layout--open' : ''}`}>
           <aside className="panel suporte-list">
             {!grupos.length ? <Empty text="Nenhum suporte encontrado." /> : grupos.map((grupo) => (
               <section className="suporte-group" key={grupo.id}>
@@ -387,7 +387,7 @@ export function SuportePage() {
                         {rotuloSolicitanteUnidade(row, { administracao: daAdmin })}
                       </strong>
                       <span className="ticket-card-tags">
-                        {daAdmin ? <ChamadoAdminTag /> : null}
+                        {daAdmin ? <ChamadoAdminTag compact /> : null}
                         <Badge value={row.status} />
                       </span>
                     </div>
@@ -406,61 +406,74 @@ export function SuportePage() {
               <Empty text="Selecione um chamado para ver o chat." />
             ) : (
               <>
-                <ChatHeader
-                  title={chamado.titulo}
-                  subtitle={`${chamadoNumero(chamado.numero_registro)} · ${nomeSolicitanteChamado(chamado, { administracao: ehChamadoAdministracao(chamado) })}${labelUnidade(chamado.unidades) ? ` · ${labelUnidade(chamado.unidades)}` : ''}`}
-                  onClick={abrirPerfilSolicitante}
-                >
-                  <StatusPicker
-                    value={chamado.status}
-                    editable
-                    onChange={async (next) => {
-                      if (!next || next === chamado.status) return;
-                      const { error: err } = await supabase.from('chamados').update({
-                        status: next,
-                        data_resolucao: next === 'resolvido' ? new Date().toISOString() : chamado.data_resolucao,
-                        resolvido_por: next === 'resolvido' ? session.user.id : chamado.resolvido_por,
-                      }).eq('id', chamado.id);
-                      if (err) return setError(err.message);
-                      await supabase.from('chamado_status_historico').insert({
-                        chamado_id: chamado.id,
-                        status_anterior: chamado.status,
-                        status_novo: next,
-                        alterado_por: session.user.id,
-                      });
-                      loadChat(chamado.id);
-                      loadLista();
-                    }}
-                  />
-                  <Btn
-                    variant="ghost"
-                    icon="calendar"
-                    onClick={() => setVisitaModal(true)}
+                <div className="chat-top">
+                  <button
+                    type="button"
+                    className="suporte-back"
+                    onClick={() => navigate('/suporte')}
                   >
-                    Agendar visita
-                  </Btn>
-                  <Btn
-                    variant="ghost"
-                    icon="layers"
-                    onClick={() => {
-                      selectCondo(chamado.condominio_id);
-                      navigate(`/rastreabilidade/${chamado.id}`);
-                    }}
+                    <Icon name="chevron" size={18} />
+                    Conversas
+                  </button>
+                  <ChatHeader
+                    title={chamado.titulo}
+                    subtitle={[
+                      ehChamadoAdministracao(chamado) ? null : nomeSolicitanteChamado(chamado),
+                      labelUnidade(chamado.unidades),
+                    ].filter(Boolean).join(' · ') || undefined}
+                    onClick={abrirPerfilSolicitante}
                   >
-                    Rastreabilidade
-                  </Btn>
-                  <Btn
-                    variant="ghost"
-                    icon="building"
-                    onClick={() => {
-                      selectCondo(chamado.condominio_id);
-                      navigate(`/chamados/${chamado.id}`);
-                    }}
-                  >
-                    Abrir no condomínio
-                  </Btn>
-                </ChatHeader>
-                {ehChamadoAdministracao(chamado) ? <ChamadoAdminBanner /> : null}
+                    <StatusPicker
+                      value={chamado.status}
+                      editable
+                      onChange={async (next) => {
+                        if (!next || next === chamado.status) return;
+                        const { error: err } = await supabase.from('chamados').update({
+                          status: next,
+                          data_resolucao: next === 'resolvido' ? new Date().toISOString() : chamado.data_resolucao,
+                          resolvido_por: next === 'resolvido' ? session.user.id : chamado.resolvido_por,
+                        }).eq('id', chamado.id);
+                        if (err) return setError(err.message);
+                        await supabase.from('chamado_status_historico').insert({
+                          chamado_id: chamado.id,
+                          status_anterior: chamado.status,
+                          status_novo: next,
+                          alterado_por: session.user.id,
+                        });
+                        loadChat(chamado.id);
+                        loadLista();
+                      }}
+                    />
+                    <Btn
+                      variant="ghost"
+                      icon="calendar"
+                      onClick={() => setVisitaModal(true)}
+                    >
+                      Agendar visita
+                    </Btn>
+                    <Btn
+                      variant="ghost"
+                      icon="layers"
+                      onClick={() => {
+                        selectCondo(chamado.condominio_id);
+                        navigate(`/rastreabilidade/${chamado.id}`);
+                      }}
+                    >
+                      Rastreabilidade
+                    </Btn>
+                    <Btn
+                      variant="ghost"
+                      icon="building"
+                      onClick={() => {
+                        selectCondo(chamado.condominio_id);
+                        navigate(`/chamados/${chamado.id}`);
+                      }}
+                    >
+                      Abrir no condomínio
+                    </Btn>
+                  </ChatHeader>
+                  {ehChamadoAdministracao(chamado) ? <ChamadoAdminBanner /> : null}
+                </div>
                 <div className="chat-log" ref={chatLogRef}>
                   <ChatLog
                     mensagens={mensagens}

@@ -1,10 +1,24 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useSession } from '../lib/session';
-import { can, ehCargoAdministracao, ehCargoConstrutora, ehChamadoAdministracao, STATUS_CHAMADO, STATUS_LABEL, UNIDADE_AREAS_COMUNS } from '../lib/permissions';
-import { chamadoNumero, formatDateTime, labelUnidade, nomePessoa, nomeSolicitanteChamado } from '../lib/format';
-import { criarChamado, minhaUnidade, enviarMensagemChamado, garantirChatChamado, anexarArquivosNasMensagens, enviarArquivoChamado, avaliarChamado, juntarMensagensComAbertura, hidratarNomesChamados, hidratarNomesMensagens, listarAgendamentosVisitaChamado } from '../lib/api';
+import { aplicarEscopoChamados, can, ehCargoAdministracao, ehCargoConstrutora, ehChamadoAdministracao, STATUS_CHAMADO, STATUS_LABEL, UNIDADE_AREAS_COMUNS } from '../lib/permissions';
+import { formatDateTime, labelUnidade, nomePessoa, nomeSolicitanteChamado, rotuloSolicitanteUnidade } from '../lib/format';
+import {
+  criarChamado,
+  minhaUnidade,
+  enviarMensagemChamado,
+  garantirChatChamado,
+  anexarArquivosNasMensagens,
+  enviarArquivoChamado,
+  avaliarChamado,
+  juntarMensagensComAbertura,
+  hidratarNomesChamados,
+  hidratarNomesMensagens,
+  listarAgendamentosVisitaChamado,
+  mapaUltimasMensagensChamados,
+  carregarEventosChatChamado,
+} from '../lib/api';
 import { ocorrenciaConcluida } from '../lib/ocorrenciasRelatorio';
 import { classeListaConversa, mapaLeituraConversas, marcarConversaLidaPorChamado } from '../lib/notifications';
 import { Alert, Badge, Btn, ChamadoAdminBanner, ChamadoAdminTag, Empty, Field, Page } from '../components/ui';
@@ -16,7 +30,361 @@ import { AgendarVisitaModal } from './AgendarVisita';
 import { SatisfacaoChamado, notaSatisfacao } from '../components/SatisfacaoEstrelas';
 import { CriarLaudoModal } from '../components/CriarLaudoModal';
 
+function ChamadosInbox() {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const { condoId, cargoTipo, session } = useSession();
+  const [rows, setRows] = useState([]);
+  const [status, setStatus] = useState('');
+  const [q, setQ] = useState('');
+  const [error, setError] = useState('');
+  const [leitura, setLeitura] = useState({});
+  const [previews, setPreviews] = useState({});
+  const [chamado, setChamado] = useState(null);
+  const [historico, setHistorico] = useState([]);
+  const [conversa, setConversa] = useState(null);
+  const [mensagens, setMensagens] = useState([]);
+  const [laudo, setLaudo] = useState(null);
+  const [texto, setTexto] = useState('');
+  const [sending, setSending] = useState(false);
+  const [lidaAte, setLidaAte] = useState(null);
+  const [visitas, setVisitas] = useState([]);
+  const [visitaModal, setVisitaModal] = useState(false);
+  const [laudoModal, setLaudoModal] = useState(false);
+  const chatLogRef = useRef(null);
+  const canStatus = can(cargoTipo, 'change_status');
+  const canLaudo = can(cargoTipo, 'create_laudo');
+  const podeAgendar = can(cargoTipo, 'manage_traceability');
+
+  async function loadLista() {
+    if (!condoId) return;
+    let query = supabase
+      .from('chamados')
+      .select('*, usuarios:solicitante_id(nome), unidades(identificacao, bloco, andar), locais(nome), origem')
+      .eq('condominio_id', condoId)
+      .order('updated_at', { ascending: false });
+    query = aplicarEscopoChamados(query, cargoTipo, session.user.id);
+    const { data, error: err } = await query;
+    if (err) setError(err.message);
+    const hydrated = await hidratarNomesChamados(data || []);
+    setRows(hydrated);
+    try {
+      const [map, last] = await Promise.all([
+        mapaLeituraConversas(),
+        mapaUltimasMensagensChamados(hydrated.map((row) => row.id)),
+      ]);
+      setLeitura(map.byChamado || {});
+      setPreviews(last || {});
+    } catch {
+      setLeitura({});
+      setPreviews({});
+    }
+  }
+
+  async function loadChat(chamadoId) {
+    if (!chamadoId) {
+      setChamado(null);
+      setMensagens([]);
+      setHistorico([]);
+      setVisitas([]);
+      setConversa(null);
+      setLaudo(null);
+      setLidaAte(null);
+      setTexto('');
+      return;
+    }
+    const { data, error: err } = await supabase
+      .from('chamados')
+      .select('*, usuarios:solicitante_id(nome), unidades(identificacao, bloco, andar), locais(nome), origem')
+      .eq('id', chamadoId)
+      .single();
+    if (err) {
+      setError(err.message);
+      setChamado(null);
+      return;
+    }
+    const [ticket] = await hidratarNomesChamados([data]);
+    setChamado(ticket);
+    setTexto('');
+    const eventos = await carregarEventosChatChamado(chamadoId);
+    setHistorico(eventos.historico);
+    setVisitas(eventos.visitas);
+    try {
+      const convId = await garantirChatChamado(chamadoId, session.user.id);
+      const created = await supabase.from('conversas').select('*').eq('id', convId).maybeSingle();
+      setConversa(created.data || { id: convId });
+      const part = await supabase
+        .from('conversa_participantes')
+        .select('ultima_leitura_em')
+        .eq('conversa_id', convId)
+        .eq('usuario_id', session.user.id)
+        .maybeSingle();
+      setLidaAte(part.data?.ultima_leitura_em || null);
+      const msgs = await supabase
+        .from('mensagens')
+        .select('*, usuarios:usuario_id(nome)')
+        .eq('conversa_id', convId)
+        .order('created_at');
+      const joined = await juntarMensagensComAbertura(ticket, await anexarArquivosNasMensagens(msgs.data || []));
+      const named = await hidratarNomesMensagens(joined, {
+        solicitanteId: ticket.solicitante_id,
+        solicitanteNome: ticket.usuarios?.nome,
+        condominioId: ticket.condominio_id,
+      });
+      if (named.nomes[ticket.solicitante_id]) {
+        setChamado({
+          ...ticket,
+          usuarios: { ...(ticket.usuarios || {}), nome: named.nomes[ticket.solicitante_id] },
+        });
+      }
+      setMensagens(named.mensagens);
+      await marcarConversaLidaPorChamado(chamadoId);
+      const map = await mapaLeituraConversas();
+      setLeitura(map.byChamado || {});
+    } catch (chatErr) {
+      setError(chatErr.message || 'Não foi possível abrir o chat.');
+      setMensagens(await juntarMensagensComAbertura(ticket, []));
+    }
+    const lau = await supabase.from('laudos_tecnicos').select('id, numero_registro').eq('chamado_id', chamadoId).maybeSingle();
+    setLaudo(lau.data);
+  }
+
+  useEffect(() => {
+    loadLista();
+  }, [condoId, cargoTipo, session.user.id]);
+
+  useEffect(() => {
+    loadChat(id);
+  }, [id]);
+
+  useEffect(() => {
+    const el = chatLogRef.current;
+    if (!el) return undefined;
+    const go = () => { el.scrollTop = el.scrollHeight; };
+    go();
+    const t = setTimeout(go, 250);
+    return () => clearTimeout(t);
+  }, [mensagens, historico, visitas, id]);
+
+  useEffect(() => {
+    if (!conversa?.id) return undefined;
+    const channel = supabase
+      .channel(`chamados-inbox-${conversa.id}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'mensagens', filter: `conversa_id=eq.${conversa.id}` }, () => {
+        loadChat(id);
+        loadLista();
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [conversa?.id, id]);
+
+  const filtered = useMemo(() => rows.filter((row) => {
+    const text = `${row.titulo} ${row.numero_registro} ${nomePessoa(row.usuarios)} ${rotuloSolicitanteUnidade(row, { administracao: ehChamadoAdministracao(row) })} ${previews[row.id] || ''}`.toLowerCase();
+    return (!status || row.status === status) && text.includes(q.toLowerCase());
+  }), [rows, status, q, previews]);
+
+  async function send(e) {
+    e.preventDefault();
+    const body = texto.trim();
+    if (!body || sending || !id) return;
+    setSending(true);
+    setError('');
+    try {
+      await enviarMensagemChamado(id, body, session.user.id);
+      setTexto('');
+      await loadChat(id);
+      await loadLista();
+    } catch (err) {
+      setError(err.message || 'Não foi possível enviar a mensagem.');
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function sendFile(file) {
+    if (!file || !id) return;
+    setSending(true);
+    setError('');
+    try {
+      await enviarArquivoChamado({
+        chamadoId: id,
+        condominioId: condoId,
+        userId: session.user.id,
+        file,
+      });
+      await loadChat(id);
+      await loadLista();
+    } catch (err) {
+      setError(err.message || 'Não foi possível enviar o arquivo.');
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function setTicketStatus(next) {
+    if (!next || !chamado || next === chamado.status) return;
+    const { error: err } = await supabase.from('chamados').update({
+      status: next,
+      data_resolucao: next === 'resolvido' ? new Date().toISOString() : chamado.data_resolucao,
+      resolvido_por: next === 'resolvido' ? session.user.id : chamado.resolvido_por,
+    }).eq('id', id);
+    if (err) return setError(err.message);
+    await supabase.from('chamado_status_historico').insert({
+      chamado_id: id,
+      status_anterior: chamado.status,
+      status_novo: next,
+      alterado_por: session.user.id,
+    });
+    await loadChat(id);
+    await loadLista();
+  }
+
+  const daAdmin = ehChamadoAdministracao(chamado);
+
+  return (
+    <Page title="Chamados" className="page-suporte page-chamados-inbox">
+      <Alert error={error} />
+      <div className="row chamado-filters">
+        <label className="search-field">
+          <Icon name="search" size={16} />
+          <input placeholder="Pesquisar chamado ou morador" value={q} onChange={(e) => setQ(e.target.value)} />
+        </label>
+        <select value={status} onChange={(e) => setStatus(e.target.value)}>
+          <option value="">Todos os status</option>
+          {STATUS_CHAMADO.map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
+        </select>
+      </div>
+
+      <div className={`suporte-layout suporte-layout--mobile-nav${id ? ' suporte-layout--open' : ''}`}>
+        <aside className="panel suporte-list">
+          {!filtered.length ? (
+            <Empty text="Nenhum chamado encontrado." />
+          ) : filtered.map((row) => {
+            const estado = leitura[row.id]?.estado || 'lida';
+            const unread = estado === 'nova' || estado === 'nao_lida';
+            const admin = ehChamadoAdministracao(row);
+            return (
+              <button
+                type="button"
+                key={row.id}
+                className={`suporte-item${admin ? ' suporte-item--admin' : ''}${row.id === id ? ' active' : ''} ${classeListaConversa(estado)}`.trim()}
+                onClick={() => navigate(`/chamados/${row.id}`)}
+              >
+                {unread ? (
+                  <UnreadOrb
+                    count={leitura[row.id]?.nao_lidas || 1}
+                    variant={estado === 'nova' ? 'nova' : 'alerta'}
+                    title={estado === 'nova' ? 'Conversa nova' : 'Mensagens novas'}
+                    onClick={() => navigate(`/chamados/${row.id}`)}
+                  />
+                ) : null}
+                <div className="suporte-item-top">
+                  <strong className="suporte-item-name">
+                    {rotuloSolicitanteUnidade(row, { administracao: admin })}
+                  </strong>
+                  <span className="ticket-card-tags">
+                    {admin ? <ChamadoAdminTag compact /> : null}
+                    <Badge value={row.status} />
+                  </span>
+                </div>
+                <small className="suporte-item-preview">
+                  {previews[row.id] || row.titulo || 'Sem mensagens'}
+                </small>
+              </button>
+            );
+          })}
+        </aside>
+
+        <section className={`chat-shell suporte-chat${chamado ? '' : ' empty'}`}>
+          {!chamado ? (
+            <Empty text="Selecione um chamado para abrir o chat." />
+          ) : (
+            <>
+              <div className="chat-top">
+                <button
+                  type="button"
+                  className="suporte-back"
+                  onClick={() => navigate('/chamados')}
+                >
+                  <Icon name="chevron" size={18} />
+                  Conversas
+                </button>
+                <ChatHeader
+                  title={chamado.titulo}
+                  subtitle={[
+                    daAdmin ? null : nomeSolicitanteChamado(chamado),
+                    labelUnidade(chamado.unidades),
+                  ].filter(Boolean).join(' · ') || undefined}
+                >
+                  <StatusPicker value={chamado.status} editable={canStatus} onChange={setTicketStatus} />
+                  {podeAgendar ? (
+                    <Btn variant="ghost" icon="calendar" onClick={() => setVisitaModal(true)}>
+                      Agendar visita
+                    </Btn>
+                  ) : null}
+                  {podeAgendar ? (
+                    <Btn to={`/rastreabilidade/${id}`} variant="ghost" icon="layers">
+                      Rastreabilidade
+                    </Btn>
+                  ) : null}
+                  {laudo && can(cargoTipo, 'view_laudos') ? (
+                    <Btn to={`/governanca-tecnica/${laudo.id}`} variant="ghost" icon="clipboard">
+                      Chat do laudo
+                    </Btn>
+                  ) : null}
+                  {canLaudo && !laudo ? (
+                    <Btn icon="clipboard" onClick={() => setLaudoModal(true)}>Criar laudo</Btn>
+                  ) : null}
+                </ChatHeader>
+                {daAdmin ? <ChamadoAdminBanner /> : null}
+              </div>
+              <div className="chat-log" ref={chatLogRef}>
+                <ChatLog
+                  mensagens={mensagens}
+                  historico={historico}
+                  visitas={visitas}
+                  sessionUserId={session.user.id}
+                  lidaAte={lidaAte}
+                  solicitanteId={chamado.solicitante_id}
+                  solicitanteNome={nomePessoa(chamado.usuarios)}
+                  origemAdmin={daAdmin}
+                  empty="Nenhuma mensagem ainda."
+                />
+              </div>
+              <ChatComposer
+                value={texto}
+                onChange={setTexto}
+                sending={sending}
+                onSend={send}
+                onFile={sendFile}
+              />
+            </>
+          )}
+        </section>
+      </div>
+
+      <AgendarVisitaModal
+        open={visitaModal}
+        onClose={() => setVisitaModal(false)}
+        chamadoId={id}
+        onScheduled={() => { loadChat(id); loadLista(); }}
+      />
+      <CriarLaudoModal
+        open={laudoModal}
+        onClose={() => setLaudoModal(false)}
+        chamado={chamado}
+      />
+    </Page>
+  );
+}
+
 export function ChamadosPage() {
+  const { cargoTipo } = useSession();
+  if (can(cargoTipo, 'view_all_tickets')) return <ChamadosInbox />;
+  return <ChamadosListaSimples />;
+}
+
+function ChamadosListaSimples() {
   const { condoId, cargoTipo, session } = useSession();
   const navigate = useNavigate();
   const [rows, setRows] = useState([]);
@@ -24,19 +392,20 @@ export function ChamadosPage() {
   const [q, setQ] = useState('');
   const [error, setError] = useState('');
   const [leitura, setLeitura] = useState({});
-  const all = can(cargoTipo, 'view_all_tickets');
+  const ehAdminCondo = ehCargoAdministracao(cargoTipo);
 
   useEffect(() => {
     if (!condoId) return;
     let query = supabase
       .from('chamados')
-      .select('*, usuarios:solicitante_id(nome), unidades(identificacao, bloco, andar), locais(nome)')
+      .select('*, usuarios:solicitante_id(nome), unidades(identificacao, bloco, andar), locais(nome), origem')
       .eq('condominio_id', condoId)
       .order('created_at', { ascending: false });
-    if (!all) query = query.eq('solicitante_id', session.user.id);
+    query = aplicarEscopoChamados(query, cargoTipo, session.user.id);
     query.then(async ({ data, error: err }) => {
       if (err) setError(err.message);
-      setRows(await hidratarNomesChamados(data || []));
+      const next = await hidratarNomesChamados(data || []);
+      setRows(ehAdminCondo ? next.filter(ehChamadoAdministracao) : next);
       try {
         const map = await mapaLeituraConversas();
         setLeitura(map.byChamado || {});
@@ -44,7 +413,7 @@ export function ChamadosPage() {
         setLeitura({});
       }
     });
-  }, [condoId, all, session.user.id]);
+  }, [condoId, ehAdminCondo, cargoTipo, session.user.id]);
 
   const filtered = rows.filter((row) => {
     const text = `${row.titulo} ${row.numero_registro} ${nomePessoa(row.usuarios)} ${labelUnidade(row.unidades)}`.toLowerCase();
@@ -53,8 +422,10 @@ export function ChamadosPage() {
 
   return (
     <Page
-      title={all ? 'Chamados' : 'Assistência técnica'}
-      lead="Abra um atendimento e acompanhe a conversa com a equipe."
+      title={ehAdminCondo ? 'Chamados da administração' : 'Assistência técnica'}
+      lead={ehAdminCondo
+        ? 'Chamados abertos pela Administração do condomínio. A equipe vê a mesma lista.'
+        : 'Abra um atendimento e acompanhe a conversa com a equipe.'}
       actions={can(cargoTipo, 'create_ticket') ? <Btn to="/chamados/novo" icon="plus">Abrir chamado</Btn> : null}
     >
       <Alert error={error} />
@@ -93,13 +464,13 @@ export function ChamadosPage() {
                 <div className="ticket-card-top">
                   <strong className="ticket-card-title">{row.titulo}</strong>
                   <span className="ticket-card-tags">
-                    {daAdmin ? <ChamadoAdminTag /> : null}
+                    {daAdmin ? <ChamadoAdminTag compact /> : null}
                     <Badge value={row.status} />
                   </span>
                 </div>
                 <small>
                   {labelUnidade(row.unidades, 'Unidade')}
-                  {all ? ` · ${nomeSolicitanteChamado(row, { administracao: daAdmin })}` : ''}
+                  {ehAdminCondo ? ` · ${nomeSolicitanteChamado(row, { administracao: daAdmin })}` : ''}
                   {' · '}
                   {formatDateTime(row.updated_at)}
                 </small>
@@ -193,6 +564,12 @@ export function ChamadoNovoPage() {
 }
 
 export function ChamadoDetalhePage() {
+  const { cargoTipo } = useSession();
+  if (can(cargoTipo, 'view_all_tickets')) return <ChamadosInbox />;
+  return <ChamadoDetalheSimples />;
+}
+
+function ChamadoDetalheSimples() {
   const { id } = useParams();
   const { condoId, cargoTipo, session } = useSession();
   const [chamado, setChamado] = useState(null);
@@ -401,11 +778,11 @@ export function ChamadoDetalhePage() {
           {canLaudo && !laudo ? (
             <Btn icon="clipboard" onClick={() => setLaudoModal(true)}>Criar laudo</Btn>
           ) : null}
-          {historico.length ? (
+          {historico.filter((h) => h.status_anterior).length ? (
             <details className="chamado-tl">
               <summary>Histórico</summary>
               <div className="timeline">
-                {historico.map((h) => (
+                {historico.filter((h) => h.status_anterior).map((h) => (
                   <div className="tl-item" key={h.id}>
                     <span className="dot" />
                     <div>
@@ -423,7 +800,10 @@ export function ChamadoDetalhePage() {
           <div className="chat-top">
             <ChatHeader
               title={chamado.titulo}
-              subtitle={`${chamadoNumero(chamado.numero_registro)} · ${nomeSolicitanteChamado(chamado, { administracao: daAdmin })}${labelUnidade(chamado.unidades) ? ` · ${labelUnidade(chamado.unidades)}` : ''}`}
+              subtitle={[
+                daAdmin ? null : nomeSolicitanteChamado(chamado),
+                labelUnidade(chamado.unidades),
+              ].filter(Boolean).join(' · ') || undefined}
             >
               {podeAgendar ? (
                 <Btn variant="ghost" icon="calendar" onClick={() => setVisitaModal(true)}>

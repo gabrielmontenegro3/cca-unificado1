@@ -235,6 +235,7 @@ export function ChatMensagem({
   origemAdmin = false,
   comFoto = false,
   omitirAnexos = false,
+  mostrarNome = false,
 }) {
   const anexos = omitirAnexos ? [] : (mensagem.anexos || []);
   const texto = String(mensagem.texto || '').trim();
@@ -245,20 +246,28 @@ export function ChatMensagem({
   const destaque = Boolean(mensagem.abertura);
   const autorNome = nomePessoa(mensagem.usuarios);
   const ehSolicitante = Boolean(solicitanteId && mensagem.usuario_id === solicitanteId);
+  const nomeBruto = ehSolicitante ? (autorNome || nomePessoa(solicitanteNome)) : autorNome;
+  const nomePessoal = /administra/i.test(nomeBruto || '') ? '' : nomeBruto;
   const autor = ehSolicitante
-    ? (autorNome || nomePessoa(solicitanteNome) || (origemAdmin ? 'Administração' : 'Morador'))
+    ? (nomePessoal || (origemAdmin ? 'Admin' : 'Morador'))
     : (autorNome || 'Equipe');
+  const mostrarRole = origemAdmin && ehSolicitante && Boolean(nomePessoal);
   const foto = mensagem.usuarios?.foto_url;
   const verified = Boolean(mensagem.usuarios?.gestao_tecnica);
   const mostrarAvatar = comFoto || Boolean(foto);
   const avatar = mostrarAvatar ? (
-    <UserAvatar src={foto} nome={mine ? 'Você' : autor} verified={verified} size={32} />
+    <UserAvatar src={foto} nome={mine && !mostrarNome ? 'Você' : autor} verified={verified} size={32} />
   ) : (!mine ? <span className="msg-avatar">{iniciais(autor)}</span> : null);
   return (
     <div className={`msg-row ${mine ? 'mine' : ''}${isNew ? ' is-new' : ''}${destaque ? ' msg-row--abertura' : ''}`}>
       {!mine ? avatar : null}
       <article className={`msg ${mine ? 'mine' : ''}${isNew ? ' is-new' : ''}${destaque ? ' msg--abertura' : ''}`}>
-        {!mine ? <small className="msg-name">{autor}</small> : null}
+        {!mine || mostrarNome ? (
+          <small className={`msg-name${origemAdmin && ehSolicitante ? ' msg-name--admin' : ''}`}>
+            {autor}
+            {mostrarRole ? <span className="msg-role">Admin</span> : null}
+          </small>
+        ) : null}
         {destaque ? <small className="msg-abertura-label">Foto do chamado</small> : null}
         {mostrarTexto ? <div className="msg-text">{mensagem.texto}</div> : null}
         <ChatAnexos anexos={anexos} />
@@ -294,17 +303,23 @@ export function ChatEvento({ item }) {
   if (item?.kind === 'status') {
     const de = STATUS_LABEL[item.de] || item.de;
     const para = STATUS_LABEL[item.para] || item.para;
-    const detalhe = de && para && de !== para ? `${de} → ${para}` : (para || de || 'Atualizado');
+    const statusKey = String(item.para || item.de || '').toLowerCase();
     return (
-      <div className="chat-event chat-event--status" role="status">
-        <span className="chat-event-icon" aria-hidden="true">
-          <Icon name="check" size={20} />
-        </span>
+      <div className={`chat-event chat-event--status chat-event--status-${statusKey}`} role="status">
+        <div className="chat-event-status-line" aria-hidden="true" />
         <div className="chat-event-copy">
-          <strong>Status atualizado</strong>
-          <span>{detalhe}</span>
+          {de && para && de !== para ? (
+            <span className="chat-event-status-flow">
+              <em>{de}</em>
+              <span aria-hidden="true">→</span>
+              <strong>{para}</strong>
+            </span>
+          ) : (
+            <strong>{para || de || 'Atualizado'}</strong>
+          )}
+          <time>{formatChatTime(item.at)}</time>
         </div>
-        <time>{formatChatTime(item.at)}</time>
+        <div className="chat-event-status-line" aria-hidden="true" />
       </div>
     );
   }
@@ -321,6 +336,8 @@ export function ChatLog({
   solicitanteId,
   solicitanteNome,
   origemAdmin = false,
+  comFoto = false,
+  equipeADireita = false,
   empty = 'Envie a primeira mensagem.',
 }) {
   const items = useMemo(
@@ -333,16 +350,22 @@ export function ChatLog({
       {items.map((item) => {
         if (item.kind !== 'msg') return <ChatEvento key={item.id} item={item} />;
         const m = item.mensagem;
+        const ehSolicitante = Boolean(solicitanteId && m.usuario_id === solicitanteId);
+        const mine = equipeADireita
+          ? Boolean(m.usuarios?.gestao_tecnica) || (solicitanteId ? !ehSolicitante : m.usuario_id === sessionUserId)
+          : m.usuario_id === sessionUserId;
         return (
           <ChatMensagem
             key={item.id}
             mensagem={m}
-            mine={m.usuario_id === sessionUserId}
+            mine={mine}
             isNew={mensagemEhNova(m, sessionUserId, lidaAte)}
             quando={formatChatTime(m.created_at)}
             solicitanteId={solicitanteId}
             solicitanteNome={solicitanteNome}
             origemAdmin={origemAdmin}
+            comFoto={comFoto}
+            mostrarNome={equipeADireita}
           />
         );
       })}

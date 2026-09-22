@@ -6,6 +6,7 @@ import { ehChamadoAdministracao } from '../lib/permissions';
 import {
   chamadoNumero,
   formatDate,
+  labelUnidade,
   nomePessoa,
   nomeSolicitanteChamado,
   rotuloLaudoUnidade,
@@ -26,6 +27,7 @@ import {
   listarArquivosAberturaLaudo,
   listarChamadosCondominio,
   listarLaudosGovernanca,
+  listarMensagensChamadoWatch,
   mapaUltimasMensagensChamados,
   mapNomesUsuarios,
   publicOrSignedUrl,
@@ -34,7 +36,6 @@ import {
 import {
   classeListaConversa,
   mapaLeituraConversas,
-  marcarConversaLidaPorChamado,
   marcarConversaLidaPorLaudo,
 } from '../lib/notifications';
 import {
@@ -44,7 +45,7 @@ import {
 } from '../lib/branding';
 import { Alert, APP_LOGO, Badge, Btn, ChamadoAdminBanner, ChamadoAdminTag, Empty, UserAvatar } from '../components/ui';
 import { Icon } from '../components/icons';
-import { ChatComposer, ChatHeader, ChatLog, CriticidadeTag, LaudoThread, LaudoThumb } from '../components/Chat';
+import { ChatComposer, ChatHeader, ChatLog, LaudoThread, LaudoThumb } from '../components/Chat';
 import { UnreadOrb } from '../components/UnreadOrb';
 
 function termoKey(userId, laudoId) {
@@ -286,34 +287,17 @@ export function ConstrutoraCondoPage() {
     setHistorico(eventos.historico);
     setVisitas(eventos.visitas);
     try {
-      const conv = await supabase.from('conversas').select('id').eq('chamado_id', id).maybeSingle();
-      const convId = conv.data?.id;
-      if (!convId) {
-        setChamadoMsgs([]);
-        return;
-      }
-      const part = await supabase
-        .from('conversa_participantes')
-        .select('ultima_leitura_em')
-        .eq('conversa_id', convId)
-        .eq('usuario_id', session.user.id)
-        .maybeSingle();
-      setChamadoLidaAte(part.data?.ultima_leitura_em || null);
-      const msgs = await supabase
-        .from('mensagens')
-        .select('*, usuarios:usuario_id(nome)')
-        .eq('conversa_id', convId)
-        .order('created_at');
-      const joined = await juntarMensagensComAbertura(ticket, await anexarArquivosNasMensagens(msgs.data || []));
+      const raw = await listarMensagensChamadoWatch(id);
+      const withFiles = await anexarArquivosNasMensagens(raw);
+      const joined = await juntarMensagensComAbertura(ticket, withFiles);
       const named = await hidratarNomesMensagens(joined, {
         solicitanteId: ticket.solicitante_id,
         solicitanteNome: ticket.usuarios?.nome,
         condominioId: ticket.condominio_id,
       });
-      setChamadoMsgs(named.mensagens);
-      await marcarConversaLidaPorChamado(id);
-      const map = await mapaLeituraConversas();
-      setLeituraChamado(map.byChamado || {});
+      setChamadoMsgs(await hidratarFotosMensagens(named.mensagens));
+      setChamadoLidaAte(null);
+      setError('');
     } catch (chatErr) {
       setChamadoMsgs([]);
       setError(chatErr.message || 'Não foi possível acompanhar este chat.');
@@ -535,7 +519,6 @@ export function ConstrutoraCondoPage() {
               <header className="ct-pane-head">
                 <div>
                   <h2>Governança técnica</h2>
-                  <p>Laudos, prognósticos e diagnósticos deste condomínio.</p>
                 </div>
               </header>
               <label className="search-field ct-search">
@@ -572,7 +555,6 @@ export function ConstrutoraCondoPage() {
                         <small className="suporte-item-preview">
                           {tipoDocumentoLaudo(row)} · {chamadoNumero(row.chamados?.numero_registro ?? row.chamado_numero)}
                         </small>
-                        <CriticidadeTag value={row.criticidade} />
                       </div>
                     </button>
                   );
@@ -589,9 +571,7 @@ export function ConstrutoraCondoPage() {
                 icon="clipboard"
                 title={rotuloLaudoUnidade(laudo)}
                 subtitle={`${tipoDoc} · ${chamadoNumero(laudo.chamados?.numero_registro ?? laudo.chamado_numero)}`}
-              >
-                <CriticidadeTag value={laudo.criticidade} />
-              </ChatHeader>
+              />
               <div className="chat-log laudo-log" ref={chatLogRef}>
                 <LaudoThread
                   mensagens={laudoMsgs}
@@ -614,7 +594,10 @@ export function ConstrutoraCondoPage() {
             <div className="chat-shell suporte-chat">
               <ChatHeader
                 title={chamado.titulo}
-                subtitle={`${chamadoNumero(chamado.numero_registro)} · ${nomeSolicitanteChamado(chamado, { administracao: ehChamadoAdministracao(chamado) })}`}
+                subtitle={[
+                  ehChamadoAdministracao(chamado) ? null : nomeSolicitanteChamado(chamado),
+                  labelUnidade(chamado.unidades),
+                ].filter(Boolean).join(' · ') || undefined}
               >
                 <Badge value={chamado.status} />
               </ChatHeader>
@@ -629,6 +612,8 @@ export function ConstrutoraCondoPage() {
                   solicitanteId={chamado.solicitante_id}
                   solicitanteNome={nomePessoa(chamado.usuarios)}
                   origemAdmin={ehChamadoAdministracao(chamado)}
+                  comFoto
+                  equipeADireita
                   empty="Nenhuma mensagem ainda."
                 />
               </div>
@@ -678,7 +663,7 @@ export function ConstrutoraCondoPage() {
                           {rotuloSolicitanteUnidade(row, { administracao: daAdmin })}
                         </strong>
                         <span className="ticket-card-tags">
-                          {daAdmin ? <ChamadoAdminTag /> : null}
+                          {daAdmin ? <ChamadoAdminTag compact /> : null}
                           <Badge value={row.status} />
                         </span>
                       </div>

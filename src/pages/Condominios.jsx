@@ -17,7 +17,7 @@ import {
   validarCriacaoCondominio,
 } from '../lib/parseSeed';
 import { formatCnpj } from '../lib/format';
-import { loginUrlDoCondominio, dominioUrlDoCondominio, nomeExibicaoConstrutora } from '../lib/branding';
+import { loginUrlDoCondominio, dominioUrlDoCondominio, loadBranding, nomeExibicaoConstrutora } from '../lib/branding';
 import { Modal } from '../components/DataList';
 import { UnreadOrb } from '../components/UnreadOrb';
 import { condominiosComNaoLidas } from '../lib/notifications';
@@ -328,6 +328,7 @@ export function CondominiosPortal() {
   const [usuariosModal, setUsuariosModal] = useState({ open: false, condoId: '', nome: '' });
   const [construtoras, setConstrutoras] = useState([]);
   const [construtoraFiltro, setConstrutoraFiltro] = useState('');
+  const [brands, setBrands] = useState({});
   const visiveis = useMemo(() => {
     if (!construtoraFiltro) return memberships;
     return memberships.filter((row) => {
@@ -349,6 +350,22 @@ export function CondominiosPortal() {
     })();
     return () => { live = false; };
   }, []);
+
+  useEffect(() => {
+    let live = true;
+    const ids = visiveis.map((row) => row.condominio_id).filter(Boolean);
+    if (!ids.length) {
+      setBrands({});
+      return undefined;
+    }
+    Promise.all(ids.map(async (id) => {
+      const next = await loadBranding(id);
+      return [id, { logo: next.logo || '', capa: next.capa || next.visaoGeral || '' }];
+    })).then((pairs) => {
+      if (live) setBrands(Object.fromEntries(pairs));
+    });
+    return () => { live = false; };
+  }, [visiveis]);
 
   useEffect(() => {
     let live = true;
@@ -829,7 +846,7 @@ export function CondominiosPortal() {
             <Empty text={memberships.length ? 'Nenhum condomínio nesta construtora.' : 'Nenhum condomínio cadastrado. Clique em criar novo condomínio.'} />
           </div>
         ) : (
-          <div className="condo-grid">
+          <div className="condo-grid condo-grid--tiles">
             {visiveis.map((row) => {
               const nome = row.condominios?.nome || 'Condomínio';
               const construtoraNome = nomeExibicaoConstrutora(row.condominios?.construtoras)
@@ -840,8 +857,9 @@ export function CondominiosPortal() {
               const editing = editingDominioId === row.condominio_id;
               const saving = savingDominio === row.condominio_id;
               const unread = unreadByCondo[row.condominio_id] || 0;
+              const mark = brands[row.condominio_id] || {};
               return (
-                <article key={row.id} className={`condo-card${unread ? ' has-unread' : ''}`}>
+                <article key={row.id} className={`condo-card condo-card--tile${unread ? ' has-unread' : ''}`}>
                   {unread ? (
                     <UnreadOrb
                       count={unread}
@@ -853,86 +871,106 @@ export function CondominiosPortal() {
                       }}
                     />
                   ) : null}
-                  <header className="condo-card-head">
-                    <strong>{nome}</strong>
-                    {row.condominios?.ativo === false ? <span className="condo-status">Inativo</span> : null}
-                  </header>
-                  {construtoraNome ? <p className="muted" style={{ margin: 0 }}>{construtoraNome}</p> : null}
-
-                  <div className="condo-links">
-                    <div className="condo-link">
-                      <span className="condo-link-label">Login</span>
-                      <p>{loginUrl}</p>
-                      <Btn
-                        variant="ghost"
-                        icon="copy"
-                        className="condo-copy"
-                        aria-label="Copiar login"
-                        onClick={() => copiarLink(loginUrl, 'Link de login')}
-                      />
+                  <div className="condo-card-hero">
+                    <div className="condo-card-capa" aria-hidden="true">
+                      {mark.capa ? (
+                        <img src={mark.capa} alt="" />
+                      ) : (
+                        <span className="condo-card-capa-fallback" />
+                      )}
                     </div>
-                    {dominioUrl ? (
+                    <div className="condo-card-logo-wrap">
+                      {mark.logo ? (
+                        <img className="condo-card-logo" src={mark.logo} alt="" />
+                      ) : (
+                        <span className="condo-card-logo is-empty" aria-hidden="true">
+                          <Icon name="building" size={32} />
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="condo-card-body">
+                    <header className="condo-card-head">
+                      <strong>{nome}</strong>
+                      {row.condominios?.ativo === false ? <span className="condo-status">Inativo</span> : null}
+                    </header>
+                    {construtoraNome ? <p className="condo-card-meta">{construtoraNome}</p> : null}
+
+                    <div className="condo-links">
                       <div className="condo-link">
-                        <span className="condo-link-label">Domínio</span>
-                        <p>{dominioUrl}</p>
+                        <span className="condo-link-label">Login</span>
+                        <p>{loginUrl}</p>
                         <Btn
                           variant="ghost"
                           icon="copy"
                           className="condo-copy"
-                          aria-label="Copiar domínio"
-                          onClick={() => copiarLink(dominioUrl, 'Domínio')}
+                          aria-label="Copiar login"
+                          onClick={() => copiarLink(loginUrl, 'Link de login')}
                         />
+                      </div>
+                      {dominioUrl ? (
+                        <div className="condo-link">
+                          <span className="condo-link-label">Domínio</span>
+                          <p>{dominioUrl}</p>
+                          <Btn
+                            variant="ghost"
+                            icon="copy"
+                            className="condo-copy"
+                            aria-label="Copiar domínio"
+                            onClick={() => copiarLink(dominioUrl, 'Domínio')}
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+
+                    {editing ? (
+                      <div className="condo-domain-edit">
+                        <Field label="Domínio personalizado">
+                          <input
+                            value={dominioDraft}
+                            onChange={(e) => setDominioDraft(e.target.value)}
+                            placeholder="residencial-aurora.com.br"
+                            autoFocus
+                          />
+                        </Field>
+                        <div className="row">
+                          <Btn icon="check" disabled={saving} onClick={() => salvarDominioDoCard(row)}>
+                            {saving ? 'Salvando…' : 'Salvar'}
+                          </Btn>
+                          <Btn variant="ghost" icon="x" disabled={saving} onClick={fecharEditorDominio}>
+                            Cancelar
+                          </Btn>
+                        </div>
                       </div>
                     ) : null}
-                  </div>
 
-                  {editing ? (
-                    <div className="condo-domain-edit">
-                      <Field label="Domínio personalizado">
-                        <input
-                          value={dominioDraft}
-                          onChange={(e) => setDominioDraft(e.target.value)}
-                          placeholder="residencial-aurora.com.br"
-                          autoFocus
-                        />
-                      </Field>
-                      <div className="row">
-                        <Btn icon="check" disabled={saving} onClick={() => salvarDominioDoCard(row)}>
-                          {saving ? 'Salvando…' : 'Salvar'}
+                    <div className="condo-card-actions">
+                      {editing ? null : (
+                        <Btn
+                          variant="ghost"
+                          icon={dominioSalvo ? 'pencil' : 'plus'}
+                          onClick={() => abrirEditorDominio(row)}
+                        >
+                          Domínio
                         </Btn>
-                        <Btn variant="ghost" icon="x" disabled={saving} onClick={fecharEditorDominio}>
-                          Cancelar
-                        </Btn>
-                      </div>
-                    </div>
-                  ) : null}
-
-                  <div className="condo-card-actions">
-                    {editing ? null : (
+                      )}
                       <Btn
                         variant="ghost"
-                        icon={dominioSalvo ? 'pencil' : 'plus'}
-                        onClick={() => abrirEditorDominio(row)}
+                        icon="plus"
+                        onClick={() => {
+                          setUsuariosModal({
+                            open: true,
+                            condoId: row.condominio_id,
+                            nome: nome,
+                          });
+                        }}
                       >
-                        Domínio
+                        Usuários
                       </Btn>
-                    )}
-                    <Btn
-                      variant="ghost"
-                      icon="plus"
-                      onClick={() => {
-                        setUsuariosModal({
-                          open: true,
-                          condoId: row.condominio_id,
-                          nome: nome,
-                        });
-                      }}
-                    >
-                      Usuários
-                    </Btn>
-                    <Btn onClick={() => openCondo(row.condominio_id)}>
-                      Abrir
-                    </Btn>
+                      <Btn onClick={() => openCondo(row.condominio_id)}>
+                        Abrir
+                      </Btn>
+                    </div>
                   </div>
                 </article>
               );

@@ -68,8 +68,7 @@ BEGIN
       AND uc.ativo IS TRUE
       AND cg.tipo IN (
         'gestao_tecnica'::public.tipo_cargo,
-        'administrador'::public.tipo_cargo,
-        'administracao'::public.tipo_cargo
+        'administrador'::public.tipo_cargo
       )
     ON CONFLICT (conversa_id, usuario_id) DO NOTHING;
 
@@ -79,6 +78,17 @@ BEGIN
     WHERE u.gestao_tecnica IS TRUE
       AND u.ativo IS TRUE
     ON CONFLICT (conversa_id, usuario_id) DO NOTHING;
+
+    IF NEW.chamado_id IS NOT NULL AND public.chamado_eh_da_administracao(NEW.chamado_id) THEN
+      INSERT INTO public.conversa_participantes (conversa_id, usuario_id)
+      SELECT NEW.id, uc.usuario_id
+      FROM public.usuario_condominio uc
+      JOIN public.cargos cg ON cg.id = uc.cargo_id
+      WHERE uc.condominio_id = NEW.condominio_id
+        AND uc.ativo IS TRUE
+        AND cg.tipo = 'administracao'::public.tipo_cargo
+      ON CONFLICT (conversa_id, usuario_id) DO NOTHING;
+    END IF;
   ELSIF NEW.tipo = 'laudo' THEN
     INSERT INTO public.conversa_participantes (conversa_id, usuario_id)
     SELECT NEW.id, uc.usuario_id

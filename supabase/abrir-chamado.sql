@@ -110,8 +110,12 @@ CREATE POLICY ch_select ON public.chamados
   FOR SELECT TO authenticated
   USING (
     public.user_is_gestao_tecnica()
-    OR public.user_is_staff(condominio_id)
+    OR public.user_is_gestao(condominio_id)
     OR solicitante_id = auth.uid()
+    OR (
+      public.user_cargo_tipo(condominio_id) = 'administracao'::public.tipo_cargo
+      AND COALESCE(origem, '') = 'administracao'
+    )
   );
 
 CREATE POLICY ch_insert ON public.chamados
@@ -321,8 +325,7 @@ BEGIN
       AND uc.ativo IS TRUE
       AND cg.tipo IN (
         'gestao_tecnica'::public.tipo_cargo,
-        'administrador'::public.tipo_cargo,
-        'administracao'::public.tipo_cargo
+        'administrador'::public.tipo_cargo
       )
     ON CONFLICT (conversa_id, usuario_id) DO NOTHING;
 
@@ -332,6 +335,17 @@ BEGIN
     WHERE u.gestao_tecnica IS TRUE
       AND u.ativo IS TRUE
     ON CONFLICT (conversa_id, usuario_id) DO NOTHING;
+
+    IF public.chamado_eh_da_administracao(NEW.chamado_id) THEN
+      INSERT INTO public.conversa_participantes (conversa_id, usuario_id)
+      SELECT NEW.id, uc.usuario_id
+      FROM public.usuario_condominio uc
+      JOIN public.cargos cg ON cg.id = uc.cargo_id
+      WHERE uc.condominio_id = NEW.condominio_id
+        AND uc.ativo IS TRUE
+        AND cg.tipo = 'administracao'::public.tipo_cargo
+      ON CONFLICT (conversa_id, usuario_id) DO NOTHING;
+    END IF;
     ELSIF NEW.tipo = 'laudo' THEN
     INSERT INTO public.conversa_participantes (conversa_id, usuario_id)
     SELECT NEW.id, uc.usuario_id

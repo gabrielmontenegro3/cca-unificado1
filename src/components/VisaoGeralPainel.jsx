@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useSession } from '../lib/session';
-import { can, ehCargoAdministracao, ehCargoConstrutora, ehChamadoAdministracao, STATUS_LABEL, statusUi } from '../lib/permissions';
+import { aplicarEscopoChamados, can, ehCargoAdministracao, ehCargoConstrutora, ehChamadoAdministracao, STATUS_LABEL, statusUi } from '../lib/permissions';
 import { chamadoNumero, embedOne, formatDate, formatTelefone, labelUnidade, maintenanceTone, nomePessoa } from '../lib/format';
 import { mapaLeituraConversas } from '../lib/notifications';
 import { arquivoEhImagem, hidratarNomesMensagens, resolverUrlArquivo, resolverVisitaAgendadaChamado, resumoOperacionalCondominio } from '../lib/api';
@@ -27,7 +27,7 @@ function atalhosPara(cargoTipo) {
   }
   if (can(t, 'manage_traceability')) {
     return [
-      { to: '/chamados', icon: 'message', label: 'Chamados', hint: 'Fila de ocorrências' },
+      { to: '/chamados', icon: 'message', label: 'Chamados', hint: 'Lista de chats e ocorrências' },
       { to: '/agendar-visita', icon: 'calendar', label: 'Agendar visita', hint: 'Marcar inspeção' },
       { to: '/rastreabilidade', icon: 'layers', label: 'Rastreabilidade', hint: 'Linha do tempo' },
       { to: '/relatorio', icon: 'file', label: 'Relatório', hint: 'Ocorrências do período' },
@@ -38,7 +38,7 @@ function atalhosPara(cargoTipo) {
   if (ehCargoAdministracao(t)) {
     return [
       { to: '/chamados/novo', icon: 'plus', label: 'Abrir chamado', hint: 'Problemas nas áreas comuns' },
-      { to: '/chamados', icon: 'message', label: 'Chamados', hint: 'Ocorrências do condomínio' },
+      { to: '/chamados', icon: 'message', label: 'Chamados', hint: 'Fila da administração' },
       { to: '/manutencao', icon: 'wrench', label: 'Manutenções', hint: 'Agenda preventiva' },
       { to: '/documentos', icon: 'folder', label: 'Documentos', hint: 'Arquivos do empreendimento' },
       { to: '/boletins', icon: 'newspaper', label: 'Boletins', hint: 'Comunicados' },
@@ -188,6 +188,7 @@ export function VisaoGeralPainel() {
   const verTodosChamados = can(cargoTipo, 'view_all_tickets');
   const isMorador = String(cargoTipo || '').toLowerCase() === 'morador';
   const ehConstrutora = ehCargoConstrutora(cargoTipo);
+  const ehAdminCondo = ehCargoAdministracao(cargoTipo);
   const atalhos = atalhosPara(cargoTipo);
 
   useEffect(() => {
@@ -229,17 +230,17 @@ export function VisaoGeralPainel() {
 
       let statsQ = supabase
         .from('chamados')
-        .select('status')
+        .select('status, origem')
         .eq('condominio_id', condoId);
-      if (!verTodosChamados) statsQ = statsQ.eq('solicitante_id', session.user.id);
+      statsQ = aplicarEscopoChamados(statsQ, cargoTipo, session.user.id);
 
       let chamadosQ = supabase
         .from('chamados')
-        .select('id, numero_registro, titulo, descricao, status, updated_at, created_at, solicitante_id, unidades(identificacao, bloco, andar)')
+        .select('id, numero_registro, titulo, descricao, status, updated_at, created_at, solicitante_id, origem, unidades(identificacao, bloco, andar)')
         .eq('condominio_id', condoId)
         .order('updated_at', { ascending: false })
         .limit(isMorador ? 12 : 5);
-      if (!verTodosChamados) chamadosQ = chamadosQ.eq('solicitante_id', session.user.id);
+      chamadosQ = aplicarEscopoChamados(chamadosQ, cargoTipo, session.user.id);
 
       const [statsRes, chamadosRes, boletinsRes, manutRes, manutCountRes, contatosRes, leitura, notifRes, docsRes] = await Promise.all([
         statsQ,
@@ -299,14 +300,15 @@ export function VisaoGeralPainel() {
       if (chamadosRes.error) {
         let fallback = supabase
           .from('chamados')
-          .select('id, numero_registro, titulo, descricao, status, updated_at, created_at, solicitante_id')
+          .select('id, numero_registro, titulo, descricao, status, updated_at, created_at, solicitante_id, origem')
           .eq('condominio_id', condoId)
           .order('updated_at', { ascending: false })
           .limit(isMorador ? 12 : 5);
-        if (!verTodosChamados) fallback = fallback.eq('solicitante_id', session.user.id);
+        fallback = aplicarEscopoChamados(fallback, cargoTipo, session.user.id);
         const plain = await fallback;
         listaChamados = dadosDe(plain);
       }
+      if (ehAdminCondo) listaChamados = listaChamados.filter(ehChamadoAdministracao);
       let aberto = 0;
       let andamento = 0;
       let concluido = 0;
@@ -363,7 +365,7 @@ export function VisaoGeralPainel() {
     return () => {
       live = false;
     };
-  }, [condoId, session?.user?.id, verTodosChamados, isMorador, ehConstrutora]);
+  }, [condoId, session?.user?.id, verTodosChamados, isMorador, ehConstrutora, cargoTipo, ehAdminCondo]);
 
   if (ehConstrutora) {
     return (
@@ -662,7 +664,7 @@ export function VisaoGeralPainel() {
       <div className="vg-columns">
         <section className="vg-card">
           <header className="vg-card-head">
-            <h3>{verTodosChamados ? 'Chamados recentes' : 'Seus chamados'}</h3>
+            <h3>{ehAdminCondo ? 'Chamados da administração' : (verTodosChamados ? 'Chamados recentes' : 'Seus chamados')}</h3>
             <Link to="/chamados">Ver todos</Link>
           </header>
           {!chamados.length ? (
@@ -675,7 +677,7 @@ export function VisaoGeralPainel() {
                     <span className="vg-list-row">
                       <strong>{row.titulo || chamadoNumero(row.numero_registro)}</strong>
                       <span className="ticket-card-tags">
-                        {ehChamadoAdministracao(row) ? <ChamadoAdminTag /> : null}
+                        {ehChamadoAdministracao(row) ? <ChamadoAdminTag compact /> : null}
                         <Badge value={row.status} />
                       </span>
                     </span>

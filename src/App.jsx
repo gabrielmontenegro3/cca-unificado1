@@ -23,6 +23,7 @@ import { LaudosGlobaisPage } from './pages/LaudosGlobais';
 import { GestaoTecnicaUsuariosPage } from './pages/GestaoTecnicaUsuarios';
 import { ConfiguracoesPage, NotificacoesPage, OnboardingPreferencias } from './pages/Sistema';
 import { GovernancaTecnicaPage } from './pages/GovernancaTecnica';
+import { MeuImovelPage } from './pages/MeuImovel';
 import { Alert, Page } from './components/ui';
 
 function HomeRedirect() {
@@ -174,6 +175,7 @@ export default function App() {
         <Route index element={<HomeRedirect />} />
         <Route path="painel" element={<Navigate to="/visao-geral" replace />} />
         <Route path="visao-geral" element={<VisaoGeralRoute />} />
+        <Route path="meu-imovel" element={<MeuImovelPage />} />
         <Route path="empreendimento" element={<Navigate to="/visao-geral" replace />} />
         <Route path="sobre-nos" element={<SecoesPage table="sobre_nos" title="Sobre nós" lead="Blocos institucionais." />} />
         <Route path="documentos" element={<DocumentosPage />} />

@@ -113,15 +113,19 @@ export function Badge({ value }) {
   return <span className={`badge ${value || ''}`}>{String(value || '').replaceAll('_', ' ')}</span>;
 }
 
-export function ChamadoAdminTag() {
-  return <span className="chamado-admin-tag">Administração do condomínio</span>;
+export function ChamadoAdminTag({ compact = false }) {
+  return (
+    <span className={`chamado-admin-tag${compact ? ' chamado-admin-tag--compact' : ''}`}>
+      {compact ? 'Admin' : 'Administração do condomínio'}
+    </span>
+  );
 }
 
 export function ChamadoAdminBanner() {
   return (
     <aside className="chamado-admin-banner" role="status">
       <span className="chamado-admin-banner-icon" aria-hidden="true">
-        <Icon name="building" size={20} />
+        <Icon name="building" size={13} />
       </span>
       <div className="chamado-admin-banner-copy">
         <strong>Administração do condomínio</strong>

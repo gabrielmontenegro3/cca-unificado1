@@ -116,9 +116,8 @@ export function ConvitePage() {
   const destinoNome = isGestao
     ? 'CCA Unificado'
     : (brand.nome || info?.construtora || info?.condominio || 'CCA Unificado');
-
   return (
-    <div className={`auth-wrap${brand.login ? ' auth-wrap-photo' : ''}`} style={brand.login ? { backgroundImage: `url(${brand.login})` } : undefined}>
+    <div className="auth-wrap">
       <div className="auth-card" style={{ width: 'min(460px, 100%)' }}>
         <div className="brand">
           <BrandLogo src={brand.logo} name={destinoNome} />

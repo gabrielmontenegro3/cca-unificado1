@@ -690,7 +690,7 @@ export function ConstrutoraPortal() {
   const { memberships, selectCondo, construtora, error: sessionError } = useSession();
   const navigate = useNavigate();
   const [brand, setBrand] = useState({ nome: '', logo: '' });
-  const [logos, setLogos] = useState({});
+  const [brands, setBrands] = useState({});
 
   useEffect(() => {
     if (!construtora?.id) return undefined;
@@ -708,14 +708,14 @@ export function ConstrutoraPortal() {
     let live = true;
     const ids = lista.map((row) => row.condominio_id).filter(Boolean);
     if (!ids.length) {
-      setLogos({});
+      setBrands({});
       return undefined;
     }
     Promise.all(ids.map(async (id) => {
       const next = await loadBranding(id);
-      return [id, next.logo || ''];
+      return [id, { logo: next.logo || '', capa: next.capa || next.visaoGeral || '' }];
     })).then((pairs) => {
-      if (live) setLogos(Object.fromEntries(pairs));
+      if (live) setBrands(Object.fromEntries(pairs));
     });
     return () => { live = false; };
   }, [lista]);
@@ -728,13 +728,12 @@ export function ConstrutoraPortal() {
   return (
     <div className="portal">
       <GestaoBar variant="construtora" />
-      <main className="portal-main">
-        <div className="portal-hero">
+      <main className="portal-main portal-main--construtora">
+        <div className="portal-hero portal-hero--brand">
           {brand.logo ? (
-            <img className="portal-hero-logo" src={brand.logo} alt={nome} />
-          ) : (
-            <h1 className="portal-hero-title">{nome}</h1>
-          )}
+            <img className="portal-hero-logo" src={brand.logo} alt="" />
+          ) : null}
+          <h1 className="portal-hero-title">{nome}</h1>
         </div>
         <Alert error={sessionError} />
         {!lista.length ? (
@@ -742,27 +741,40 @@ export function ConstrutoraPortal() {
             <Empty text="Nenhum condomínio vinculado a esta construtora." />
           </div>
         ) : (
-          <div className="condo-grid">
+          <div className="condo-grid condo-grid--tiles">
             {lista.map((row) => {
               const condoNome = row.condominios?.nome || 'Condomínio';
-              const logo = logos[row.condominio_id];
+              const mark = brands[row.condominio_id] || {};
               return (
-                <article key={row.id} className="condo-card">
-                  <header className="condo-card-head">
-                    <div className="condo-card-brand">
-                      {logo ? <img className="condo-card-logo" src={logo} alt="" /> : (
+                <article key={row.id} className="condo-card condo-card--tile">
+                  <div className="condo-card-hero">
+                    <div className="condo-card-capa" aria-hidden="true">
+                      {mark.capa ? (
+                        <img src={mark.capa} alt="" />
+                      ) : (
+                        <span className="condo-card-capa-fallback" />
+                      )}
+                    </div>
+                    <div className="condo-card-logo-wrap">
+                      {mark.logo ? (
+                        <img className="condo-card-logo" src={mark.logo} alt="" />
+                      ) : (
                         <span className="condo-card-logo is-empty" aria-hidden="true">
-                          <Icon name="building" size={22} />
+                          <Icon name="building" size={32} />
                         </span>
                       )}
-                      <strong>{condoNome}</strong>
                     </div>
-                    {row.condominios?.ativo === false ? <span className="condo-status">Inativo</span> : null}
-                  </header>
-                  <div className="condo-card-actions">
-                    <Btn icon="door" onClick={() => entrar(row.condominio_id)}>
-                      Entrar
-                    </Btn>
+                  </div>
+                  <div className="condo-card-body">
+                    <header className="condo-card-head">
+                      <strong>{condoNome}</strong>
+                      {row.condominios?.ativo === false ? <span className="condo-status">Inativo</span> : null}
+                    </header>
+                    <div className="condo-card-actions">
+                      <Btn icon="door" onClick={() => entrar(row.condominio_id)}>
+                        Entrar
+                      </Btn>
+                    </div>
                   </div>
                 </article>
               );

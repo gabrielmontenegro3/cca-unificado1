@@ -832,6 +832,22 @@ function ignoraDuplicado(error) {
   return code === '23505' || /duplicate|unique|already exists|conflict/i.test(msg);
 }
 
+function ehConversaDeChamado(row) {
+  if (!row) return false;
+  if (row.laudo_id) return false;
+  return String(row.tipo || 'chamado').toLowerCase() !== 'laudo';
+}
+
+async function idsConversasChamado(chamadoId) {
+  if (!chamadoId) return [];
+  const { data, error } = await supabase
+    .from('conversas')
+    .select('id, tipo, laudo_id')
+    .eq('chamado_id', chamadoId);
+  if (error) throw error;
+  return (data || []).filter(ehConversaDeChamado).map((row) => row.id).filter(Boolean);
+}
+
 async function garantirChatDireto(chamadoId, userId) {
   const { data: chamado, error: chErr } = await supabase
     .from('chamados')
@@ -842,10 +858,10 @@ async function garantirChatDireto(chamadoId, userId) {
 
   let { data: conv, error: convErr } = await supabase
     .from('conversas')
-    .select('id')
-    .eq('chamado_id', chamadoId)
-    .maybeSingle();
+    .select('id, tipo, laudo_id')
+    .eq('chamado_id', chamadoId);
   if (convErr) throw convErr;
+  conv = (conv || []).find(ehConversaDeChamado) || null;
 
   if (!conv?.id) {
     const created = await supabase
@@ -859,9 +875,12 @@ async function garantirChatDireto(chamadoId, userId) {
       .select('id')
       .single();
     if (created.error) {
-      const again = await supabase.from('conversas').select('id').eq('chamado_id', chamadoId).maybeSingle();
-      if (!again.data?.id) throw created.error;
-      conv = again.data;
+      const again = await supabase
+        .from('conversas')
+        .select('id, tipo, laudo_id')
+        .eq('chamado_id', chamadoId);
+      conv = (again.data || []).find(ehConversaDeChamado) || null;
+      if (!conv?.id) throw created.error;
     } else {
       conv = created.data;
     }
@@ -947,9 +966,9 @@ export async function mapaUltimasMensagensChamados(chamadoIds) {
   for (let i = 0; i < ids.length; i += 80) {
     const { data } = await supabase
       .from('conversas')
-      .select('id, chamado_id')
+      .select('id, chamado_id, tipo, laudo_id')
       .in('chamado_id', ids.slice(i, i + 80));
-    convs.push(...(data || []));
+    convs.push(...(data || []).filter(ehConversaDeChamado));
   }
   const convToChamado = Object.fromEntries(convs.map((row) => [row.id, row.chamado_id]));
   const convIds = convs.map((row) => row.id);
@@ -974,6 +993,32 @@ export async function mapaUltimasMensagensChamados(chamadoIds) {
     map[chamadoId] = preview;
   }
   return map;
+}
+
+export async function listarMensagensChamadoWatch(chamadoId) {
+  if (!chamadoId) return [];
+  const rpc = await supabase.rpc('listar_mensagens_chamado_watch', { p_chamado_id: chamadoId });
+  let ids = [];
+  try {
+    ids = await idsConversasChamado(chamadoId);
+  } catch {
+    ids = [];
+  }
+
+  if (!rpc.error) {
+    const rows = Array.isArray(rpc.data) ? rpc.data : [];
+    if (ids.length) return rows.filter((m) => ids.includes(m.conversa_id));
+    if (rpc.data == null) return [];
+  }
+
+  if (!ids.length) return [];
+  const msgs = await supabase
+    .from('mensagens')
+    .select('*')
+    .in('conversa_id', ids)
+    .order('created_at');
+  if (msgs.error) throw msgs.error;
+  return msgs.data || [];
 }
 
 export async function carregarEventosChatChamado(chamadoId) {

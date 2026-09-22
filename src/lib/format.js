@@ -174,6 +174,9 @@ export function labelUnidade(unidade, fallback = '') {
 }
 
 export function rotuloSolicitanteUnidade(chamado, opts = {}) {
+  if (opts.administracao) {
+    return labelUnidade(chamado?.unidades) || 'Áreas comuns';
+  }
   const nome = nomeSolicitanteChamado(chamado, opts);
   const unidade = labelUnidade(chamado?.unidades);
   return unidade ? `${nome} - ${unidade}` : nome;

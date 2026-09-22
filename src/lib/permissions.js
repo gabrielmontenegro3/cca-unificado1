@@ -124,6 +124,16 @@ export function ehChamadoAdministracao(row) {
   return ehUnidadeAreasComuns(row.unidades || row.unidade);
 }
 
+export function aplicarEscopoChamados(query, cargoTipo, userId) {
+  if (ehCargoAdministracao(cargoTipo)) {
+    return query.eq('origem', ORIGEM_ADMINISTRACAO);
+  }
+  if (!can(cargoTipo, 'view_all_tickets')) {
+    return query.eq('solicitante_id', userId);
+  }
+  return query;
+}
+
 export function can(tipo, action) {
   const t = String(tipo || '').toLowerCase().trim();
   const map = {
@@ -138,7 +148,8 @@ export function can(tipo, action) {
     create_laudo: t === 'gestao_tecnica',
     view_laudos: t !== 'morador',
     chat_laudo: t === 'gestao_tecnica' || t === 'construtora',
-    view_all_tickets: isStaff(t),
+    view_all_tickets: isGestao(t),
+    view_admin_tickets: t === 'administracao',
     create_ticket: t === 'morador' || t === 'administracao',
     view_maintenance: isStaff(t) || isGestao(t) || t === 'construtora',
     view_chamado_numeros: isStaff(t) || t === 'construtora',
@@ -189,6 +200,7 @@ export function navGroupsFor(tipo) {
         ...(isMorador ? [{ to: '/assistencia-tecnica', label: 'Assistência técnica', icon: 'headset' }] : []),
         ...(isAdminCondo ? [{ to: '/chamados', label: 'Chamados', icon: 'headset' }] : []),
         { to: '/documentos', label: 'Documentos', icon: 'folder' },
+        { to: '/meu-imovel', label: 'Meu imóvel', icon: 'door' },
         { to: '/boletins', label: 'Boletins informativos', icon: 'newspaper' },
       ],
     },
@@ -198,7 +210,8 @@ export function navGroupsFor(tipo) {
       icon: 'wrench',
       items: [
         { to: '/manutencao', label: 'Manutenções', icon: 'wrench' },
-        ...(isGT ? [{ to: '/suporte', label: 'Suporte', icon: 'headset' }] : []),
+        ...(isGT ? [{ to: '/chamados', label: 'Chamados', icon: 'message' }] : []),
+        ...(isGT ? [{ to: '/suporte', label: 'Suporte global', icon: 'headset' }] : []),
         ...(isGT ? [{ to: '/rastreabilidade', label: 'Rastreabilidade', icon: 'layers' }] : []),
         ...(isGT ? [{ to: '/agendar-visita', label: 'Agendar visita', icon: 'calendar' }] : []),
         ...(isGT ? [{ to: '/relatorio', label: 'Relatório', icon: 'file' }] : []),

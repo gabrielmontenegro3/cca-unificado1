@@ -341,7 +341,7 @@ export function RastreabilidadeListaPage() {
               <div className="ticket-card-top">
                 <strong className="ticket-card-title">{row.titulo}</strong>
                 <span className="ticket-card-tags">
-                  {daAdmin ? <ChamadoAdminTag /> : null}
+                  {daAdmin ? <ChamadoAdminTag compact /> : null}
                   <Badge value={row.status} />
                 </span>
               </div>

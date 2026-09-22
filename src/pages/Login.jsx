@@ -161,12 +161,12 @@ export function LoginPage() {
     : (isPortalLogin ? 'Portal do condomínio' : 'CCA Unificado');
 
   return (
-    <div className={`auth-screen${isPortalLogin ? ' is-condo' : ' is-cca'}`}>
+    <div className={`auth-screen${isConstrutoraLogin ? ' is-construtora' : isPortalLogin ? ' is-condo' : ' is-cca'}`}>
       <main className="auth-panel">
         <div className="auth-card-login">
           {isConstrutoraLogin ? (
             <div className="auth-card-logos">
-              <div className="auth-card-logo app-brand">
+              <div className="auth-card-logo">
                 <img src={APP_LOGO} alt="CCA" />
               </div>
               <span className="auth-logos-bar" aria-hidden="true" />

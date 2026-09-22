@@ -97,6 +97,7 @@ export function montarLinhaDoTempoChat({ mensagens = [], historico = [], visitas
   }
 
   for (const h of historico || []) {
+    if (!h?.status_anterior) continue;
     items.push({
       kind: 'status',
       id: `status-${h.id}`,
