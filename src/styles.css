@@ -3991,6 +3991,16 @@ button.sat-star:focus-visible {
   opacity: 0.9;
 }
 .docs-folder-download { width: 100%; justify-content: center; }
+.docs-folder-actions {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+.docs-folder-actions .docs-folder-download,
+.docs-folder-actions .docs-folder-delete {
+  width: 100%;
+  justify-content: center;
+}
 .docs-upload { margin-top: 24px; }
 
 .app .docs-folder {

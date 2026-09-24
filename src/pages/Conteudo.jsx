@@ -113,6 +113,26 @@ export function DocumentosPage() {
     }
   }
 
+  async function excluir(row) {
+    if (!editable || !row?.id) return;
+    const nome = nomeDocumento(row);
+    if (!window.confirm(`Excluir o documento “${nome}”?`)) return;
+    setBusyId(row.id);
+    setError('');
+    try {
+      const { error: err } = await supabase.from('documentos_empreendimento').delete().eq('id', row.id);
+      if (err) throw err;
+      if (row.arquivo_id) {
+        await supabase.from('arquivos').delete().eq('id', row.arquivo_id);
+      }
+      await load();
+    } catch (err) {
+      setError(err.message || 'Não foi possível excluir o documento.');
+    } finally {
+      setBusyId('');
+    }
+  }
+
   const filtered = rows.filter((r) => {
     const hay = `${nomeDocumento(r)} ${r.descricao || ''} ${r.arquivos?.nome_original || ''}`.toLowerCase();
     return hay.includes(q.toLowerCase());
@@ -160,14 +180,27 @@ export function DocumentosPage() {
                   {row.created_at ? formatDate(row.created_at) : '—'}
                 </span>
               </div>
-              <Btn
-                icon="download"
-                className="docs-folder-download"
-                disabled={busyId === row.id || !row.arquivos?.storage_path}
-                onClick={() => baixar(row)}
-              >
-                {busyId === row.id ? 'Baixando…' : 'Download'}
-              </Btn>
+              <div className="docs-folder-actions">
+                <Btn
+                  icon="download"
+                  className="docs-folder-download"
+                  disabled={busyId === row.id || !row.arquivos?.storage_path}
+                  onClick={() => baixar(row)}
+                >
+                  {busyId === row.id ? 'Baixando…' : 'Download'}
+                </Btn>
+                {editable ? (
+                  <Btn
+                    variant="ghost"
+                    icon="x"
+                    className="docs-folder-delete"
+                    disabled={busyId === row.id}
+                    onClick={() => excluir(row)}
+                  >
+                    Excluir
+                  </Btn>
+                ) : null}
+              </div>
             </li>
           ))}
         </ul>
