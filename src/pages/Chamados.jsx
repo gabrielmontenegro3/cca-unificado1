@@ -21,6 +21,7 @@ import {
 } from '../lib/api';
 import { ocorrenciaConcluida } from '../lib/ocorrenciasRelatorio';
 import { classeListaConversa, mapaLeituraConversas, marcarConversaLidaPorChamado } from '../lib/notifications';
+import { useChatAoVivo } from '../lib/chatAoVivo';
 import { Alert, Badge, Btn, ChamadoAdminBanner, ChamadoAdminTag, Empty, Field, Page } from '../components/ui';
 import { Icon } from '../components/icons';
 import { ChatComposer, ChatHeader, ChatLog } from '../components/Chat';
@@ -29,6 +30,7 @@ import { UnreadOrb } from '../components/UnreadOrb';
 import { AgendarVisitaModal } from './AgendarVisita';
 import { SatisfacaoChamado, notaSatisfacao } from '../components/SatisfacaoEstrelas';
 import { CriarLaudoModal } from '../components/CriarLaudoModal';
+import { EspecificidadeBotao, EspecificidadeModal } from '../components/Especificidade';
 
 function ChamadosInbox() {
   const { id } = useParams();
@@ -51,10 +53,12 @@ function ChamadosInbox() {
   const [visitas, setVisitas] = useState([]);
   const [visitaModal, setVisitaModal] = useState(false);
   const [laudoModal, setLaudoModal] = useState(false);
+  const [especModal, setEspecModal] = useState(false);
   const chatLogRef = useRef(null);
   const canStatus = can(cargoTipo, 'change_status');
   const canLaudo = can(cargoTipo, 'create_laudo');
   const podeAgendar = can(cargoTipo, 'manage_traceability');
+  const podeEspecificar = cargoTipo === 'gestao_tecnica';
 
   async function loadLista() {
     if (!condoId) return;
@@ -81,7 +85,7 @@ function ChamadosInbox() {
     }
   }
 
-  async function loadChat(chamadoId) {
+  async function loadChat(chamadoId, { silencioso = false } = {}) {
     if (!chamadoId) {
       setChamado(null);
       setMensagens([]);
@@ -105,7 +109,7 @@ function ChamadosInbox() {
     }
     const [ticket] = await hidratarNomesChamados([data]);
     setChamado(ticket);
-    setTexto('');
+    if (!silencioso) setTexto('');
     const eventos = await carregarEventosChatChamado(chamadoId);
     setHistorico(eventos.historico);
     setVisitas(eventos.visitas);
@@ -166,17 +170,10 @@ function ChamadosInbox() {
     return () => clearTimeout(t);
   }, [mensagens, historico, visitas, id]);
 
-  useEffect(() => {
-    if (!conversa?.id) return undefined;
-    const channel = supabase
-      .channel(`chamados-inbox-${conversa.id}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'mensagens', filter: `conversa_id=eq.${conversa.id}` }, () => {
-        loadChat(id);
-        loadLista();
-      })
-      .subscribe();
-    return () => { supabase.removeChannel(channel); };
-  }, [conversa?.id, id]);
+  useChatAoVivo({
+    conversaId: id ? conversa?.id : null,
+    onAtualizar: () => Promise.all([loadChat(id, { silencioso: true }), loadLista()]),
+  });
 
   const filtered = useMemo(() => rows.filter((row) => {
     const text = `${row.titulo} ${row.numero_registro} ${nomePessoa(row.usuarios)} ${rotuloSolicitanteUnidade(row, { administracao: ehChamadoAdministracao(row) })} ${previews[row.id] || ''}`.toLowerCase();
@@ -327,6 +324,9 @@ function ChamadosInbox() {
                       Rastreabilidade
                     </Btn>
                   ) : null}
+                  {podeEspecificar ? (
+                    <EspecificidadeBotao chamado={chamado} onClick={() => setEspecModal(true)} />
+                  ) : null}
                   {laudo && can(cargoTipo, 'view_laudos') ? (
                     <Btn to={`/governanca-tecnica/${laudo.id}`} variant="ghost" icon="clipboard">
                       Chat do laudo
@@ -369,6 +369,15 @@ function ChamadosInbox() {
         chamadoId={id}
         onScheduled={() => { loadChat(id); loadLista(); }}
       />
+      {podeEspecificar ? (
+        <EspecificidadeModal
+          open={especModal}
+          chamado={chamado}
+          userId={session?.user?.id}
+          onClose={() => setEspecModal(false)}
+          onSaved={(valores) => setChamado((prev) => (prev ? { ...prev, ...valores } : prev))}
+        />
+      ) : null}
       <CriarLaudoModal
         open={laudoModal}
         onClose={() => setLaudoModal(false)}
@@ -553,7 +562,16 @@ export function ChamadoNovoPage() {
           <p className="hint">Este chamado fica atrelado à unidade Áreas comuns, para problemas das áreas comuns do condomínio.</p>
         ) : null}
         <Field label="Título"><input value={form.titulo} onChange={(e) => setForm({ ...form, titulo: e.target.value })} required /></Field>
-        <Field label="Descrição"><textarea value={form.descricao} onChange={(e) => setForm({ ...form, descricao: e.target.value })} required /></Field>
+        <Field label="Descrição">
+          <textarea
+            value={form.descricao}
+            onChange={(e) => setForm({ ...form, descricao: e.target.value })}
+            placeholder="Descreva com o máximo de detalhes possível: o que aconteceu, em qual cômodo ou local, desde quando e com que frequência."
+            rows={5}
+            required
+          />
+        </Field>
+        <p className="hint">Quanto mais detalhes você informar, mais rápido a equipe técnica consegue entender e resolver o problema.</p>
         <Field label="Fotos ou documentos">
           <input type="file" multiple accept="image/*,.pdf" capture="environment" onChange={(e) => setFiles([...e.target.files])} />
         </Field>
@@ -664,14 +682,10 @@ function ChamadoDetalheSimples() {
     return () => clearTimeout(t);
   }, [mensagens, historico, visitas]);
 
-  useEffect(() => {
-    if (!conversa?.id) return undefined;
-    const channel = supabase
-      .channel(`chat-${conversa.id}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'mensagens', filter: `conversa_id=eq.${conversa.id}` }, () => load())
-      .subscribe();
-    return () => { supabase.removeChannel(channel); };
-  }, [conversa?.id]);
+  useChatAoVivo({
+    conversaId: conversa?.id,
+    onAtualizar: load,
+  });
 
   useEffect(() => {
     if (!id) return undefined;

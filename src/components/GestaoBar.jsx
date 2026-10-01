@@ -16,6 +16,7 @@ const GT_TABS = [
 const CONSTRUTORA_TABS = [
   { to: '/', label: 'Condomínios', icon: 'building', match: (path) => path === '/' || path.startsWith('/condominios') },
   { to: '/laudos-globais', label: 'Governança Técnica', icon: 'clipboard', match: (path) => path.startsWith('/laudos-globais') },
+  { to: '/construtora-relatorios', label: 'Relatórios', icon: 'layers', match: (path) => path.startsWith('/construtora-relatorios') },
 ];
 
 export function GestaoBar({ variant = 'gestao' }) {

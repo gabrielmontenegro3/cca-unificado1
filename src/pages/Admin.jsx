@@ -36,9 +36,46 @@ function montarUnidadeTexto({ bloco, torre, casa, apartamento }) {
   return direita || esquerda || '';
 }
 
-function UnidadeFields({ value, onChange, required }) {
+/** 'casas' | 'predios' | null (sem unidades ou condomínio misto). */
+function tipoDoCondominio(unidades) {
+  const reais = (unidades || []).filter((u) => !/^[áa]reas comuns$/i.test(limparParte(u.identificacao)));
+  const casas = reais.filter((u) => /^casa\b/i.test(limparParte(u.identificacao))).length;
+  const apts = reais.filter((u) => /\b(apt|apto|apartamento)\b/i.test(limparParte(u.identificacao)) || limparParte(u.andar)).length;
+  if (casas && !apts) return 'casas';
+  if (apts && !casas) return 'predios';
+  return null;
+}
+
+function unidadeDoTipo(value, tipo) {
   const v = { ...EMPTY_UNIDADE, ...(value || {}) };
+  if (tipo === 'casas') return { ...v, bloco: '', torre: '', apartamento: '' };
+  if (tipo === 'predios') return { ...v, casa: '' };
+  return v;
+}
+
+function validarUnidade(value, tipo) {
+  const v = { ...EMPTY_UNIDADE, ...(value || {}) };
+  if (tipo === 'casas' && (limparParte(v.apartamento) || limparParte(v.torre) || limparParte(v.bloco))) {
+    return 'Este condomínio é de casas. Informe o número da casa, não apartamento.';
+  }
+  if (tipo === 'predios' && limparParte(v.casa)) {
+    return 'Este condomínio é de apartamentos. Informe o apartamento, não casa.';
+  }
+  if (!montarUnidadeTexto(unidadeDoTipo(v, tipo))) {
+    return tipo === 'casas'
+      ? 'Informe a casa do morador.'
+      : tipo === 'predios'
+        ? 'Informe o apartamento do morador.'
+        : 'Informe a casa ou o apartamento do morador.';
+  }
+  return '';
+}
+
+function UnidadeFields({ value, onChange, required, tipo = null }) {
+  const v = unidadeDoTipo(value, tipo);
   const preview = montarUnidadeTexto(v);
+  const ehCasas = tipo === 'casas';
+  const ehPredios = tipo === 'predios';
 
   function set(key, next) {
     onChange({ ...v, [key]: next });
@@ -46,43 +83,59 @@ function UnidadeFields({ value, onChange, required }) {
 
   return (
     <div className="unidade-fields stack">
-      <p className="hint" style={{ margin: 0 }}>Preencha o que existir na unidade do morador.</p>
+      <p className="hint" style={{ margin: 0 }}>
+        {ehCasas
+          ? 'Condomínio de casas: informe a casa do morador.'
+          : ehPredios
+            ? 'Condomínio de apartamentos: informe o bloco ou torre e o apartamento.'
+            : 'Preencha o que existir na unidade do morador.'}
+      </p>
       <div className="grid grid-2">
-        <Field label="Bloco">
-          <input
-            value={v.bloco}
-            onChange={(e) => set('bloco', e.target.value)}
-            placeholder="A, B, 1…"
-          />
-        </Field>
-        <Field label="Torre">
-          <input
-            value={v.torre}
-            onChange={(e) => set('torre', e.target.value)}
-            placeholder="1, Única…"
-          />
-        </Field>
-        <Field label="Casa">
-          <input
-            value={v.casa}
-            onChange={(e) => set('casa', e.target.value)}
-            placeholder="12"
-            required={required && !limparParte(v.apartamento)}
-          />
-        </Field>
-        <Field label="Apartamento">
-          <input
-            value={v.apartamento}
-            onChange={(e) => set('apartamento', e.target.value)}
-            placeholder="101"
-            required={required && !limparParte(v.casa)}
-          />
-        </Field>
+        {!ehCasas ? (
+          <Field label="Bloco">
+            <input
+              value={v.bloco}
+              onChange={(e) => set('bloco', e.target.value)}
+              placeholder="A, B, 1…"
+            />
+          </Field>
+        ) : null}
+        {!ehCasas ? (
+          <Field label="Torre">
+            <input
+              value={v.torre}
+              onChange={(e) => set('torre', e.target.value)}
+              placeholder="1, Única…"
+            />
+          </Field>
+        ) : null}
+        {!ehPredios ? (
+          <Field label="Casa">
+            <input
+              value={v.casa}
+              onChange={(e) => set('casa', e.target.value)}
+              placeholder="12"
+              required={required && (ehCasas || !limparParte(v.apartamento))}
+            />
+          </Field>
+        ) : null}
+        {!ehCasas ? (
+          <Field label="Apartamento">
+            <input
+              value={v.apartamento}
+              onChange={(e) => set('apartamento', e.target.value)}
+              placeholder="101"
+              required={required && (ehPredios || !limparParte(v.casa))}
+            />
+          </Field>
+        ) : null}
       </div>
       {preview ? (
         <p className="hint unidade-preview">Unidade: <strong>{preview}</strong></p>
       ) : (
-        <p className="hint">Informe ao menos a casa ou o apartamento.</p>
+        <p className="hint">
+          {ehCasas ? 'Informe a casa.' : ehPredios ? 'Informe o apartamento.' : 'Informe ao menos a casa ou o apartamento.'}
+        </p>
       )}
     </div>
   );
@@ -110,10 +163,21 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
     email: '', cargo: 'morador', unidade: { ...EMPTY_UNIDADE },
   });
   const [selectedConvite, setSelectedConvite] = useState(null);
+  const [tipoUnidade, setTipoUnidade] = useState(null);
+
+  useEffect(() => {
+    setCreateForm((prev) => ({ ...prev, unidade: { ...EMPTY_UNIDADE } }));
+    setInviteForm((prev) => ({ ...prev, unidade: { ...EMPTY_UNIDADE } }));
+  }, [tipoUnidade]);
 
   async function load() {
     if (!condoId) return;
     setError('');
+    supabase
+      .from('unidades')
+      .select('identificacao, andar')
+      .eq('condominio_id', condoId)
+      .then(({ data }) => setTipoUnidade(tipoDoCondominio(data)));
     try {
       setRows(await listarUsuariosCondominio(condoId));
     } catch (err) {
@@ -141,10 +205,10 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
     setError('');
     setOk('');
     try {
-      const unidadeTexto = createForm.cargo === 'morador' ? montarUnidadeTexto(createForm.unidade) : null;
-      if (createForm.cargo === 'morador' && !unidadeTexto) {
-        throw new Error('Informe a casa ou o apartamento do morador.');
-      }
+      const ehMorador = createForm.cargo === 'morador';
+      const erroUnidade = ehMorador ? validarUnidade(createForm.unidade, tipoUnidade) : '';
+      if (erroUnidade) throw new Error(erroUnidade);
+      const unidadeTexto = ehMorador ? montarUnidadeTexto(unidadeDoTipo(createForm.unidade, tipoUnidade)) : null;
 
       let userId = null;
       try {
@@ -181,10 +245,10 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
     setError('');
     setOk('');
     try {
-      const unidadeTexto = inviteForm.cargo === 'morador' ? montarUnidadeTexto(inviteForm.unidade) : null;
-      if (inviteForm.cargo === 'morador' && !unidadeTexto) {
-        throw new Error('Informe a casa ou o apartamento do morador.');
-      }
+      const ehMorador = inviteForm.cargo === 'morador';
+      const erroUnidade = ehMorador ? validarUnidade(inviteForm.unidade, tipoUnidade) : '';
+      if (erroUnidade) throw new Error(erroUnidade);
+      const unidadeTexto = ehMorador ? montarUnidadeTexto(unidadeDoTipo(inviteForm.unidade, tipoUnidade)) : null;
 
       const token = await criarConvite({
         condominioId: condoId,
@@ -282,6 +346,7 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
                   <UnidadeFields
                     value={createForm.unidade}
                     onChange={(unidade) => setCreateForm({ ...createForm, unidade })}
+                    tipo={tipoUnidade}
                     required
                   />
                 ) : null}
@@ -307,6 +372,7 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
                   <UnidadeFields
                     value={inviteForm.unidade}
                     onChange={(unidade) => setInviteForm({ ...inviteForm, unidade })}
+                    tipo={tipoUnidade}
                     required
                   />
                 ) : null}

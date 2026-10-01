@@ -268,7 +268,7 @@ export function ChatMensagem({
             {mostrarRole ? <span className="msg-role">Admin</span> : null}
           </small>
         ) : null}
-        {destaque ? <small className="msg-abertura-label">Foto do chamado</small> : null}
+        {destaque ? <small className="msg-abertura-label">Abertura do chamado</small> : null}
         {mostrarTexto ? <div className="msg-text">{mensagem.texto}</div> : null}
         <ChatAnexos anexos={anexos} />
         <time>{quando}</time>

@@ -10,6 +10,7 @@ import {
   mapaLeituraConversas,
   marcarConversaLidaPorChamado,
 } from '../lib/notifications';
+import { useChatAoVivo } from '../lib/chatAoVivo';
 import { Alert, Badge, Btn, ChamadoAdminBanner, ChamadoAdminTag, Empty } from '../components/ui';
 import { Icon } from '../components/icons';
 import { GestaoBar } from '../components/GestaoBar';
@@ -18,6 +19,7 @@ import { StatusPicker } from '../components/StatusPicker';
 import { UnreadOrb } from '../components/UnreadOrb';
 import { Modal } from '../components/DataList';
 import { AgendarVisitaModal } from './AgendarVisita';
+import { EspecificidadeBotao, EspecificidadeModal } from '../components/Especificidade';
 
 export function SuportePage() {
   const { id } = useParams();
@@ -36,11 +38,13 @@ export function SuportePage() {
   const [sending, setSending] = useState(false);
   const [leitura, setLeitura] = useState({});
   const [lidaAte, setLidaAte] = useState(null);
+  const [conversaId, setConversaId] = useState(null);
   const [perfilOpen, setPerfilOpen] = useState(false);
   const [perfil, setPerfil] = useState(null);
   const [ocorrencias, setOcorrencias] = useState([]);
   const [perfilBusy, setPerfilBusy] = useState(false);
   const [visitaModal, setVisitaModal] = useState(false);
+  const [especModal, setEspecModal] = useState(false);
   const [historico, setHistorico] = useState([]);
   const [visitas, setVisitas] = useState([]);
   const [previews, setPreviews] = useState({});
@@ -89,6 +93,7 @@ export function SuportePage() {
       setHistorico([]);
       setVisitas([]);
       setLidaAte(null);
+      setConversaId(null);
       return;
     }
     const { data, error: err } = await supabase
@@ -111,6 +116,7 @@ export function SuportePage() {
     setVisitas(eventos.visitas);
     try {
       const convId = await garantirChatChamado(chamadoId, session.user.id);
+      setConversaId(convId || null);
       const part = await supabase
         .from('conversa_participantes')
         .select('ultima_leitura_em')
@@ -142,6 +148,7 @@ export function SuportePage() {
       setLeitura(map.byChamado || {});
     } catch (chatErr) {
       const conv = await supabase.from('conversas').select('id').eq('chamado_id', chamadoId).maybeSingle();
+      setConversaId(conv.data?.id || null);
       if (conv.data?.id) {
         const msgs = await supabase
           .from('mensagens')
@@ -179,6 +186,11 @@ export function SuportePage() {
     if (!isGestaoTecnica) return;
     loadChat(id);
   }, [id, isGestaoTecnica, session.user.id]);
+
+  useChatAoVivo({
+    conversaId: isGestaoTecnica && id ? conversaId : null,
+    onAtualizar: () => Promise.all([loadChat(id), loadLista()]),
+  });
 
   useEffect(() => {
     const el = chatLogRef.current;
@@ -471,6 +483,7 @@ export function SuportePage() {
                     >
                       Abrir no condomínio
                     </Btn>
+                    <EspecificidadeBotao chamado={chamado} onClick={() => setEspecModal(true)} />
                   </ChatHeader>
                   {ehChamadoAdministracao(chamado) ? <ChamadoAdminBanner /> : null}
                 </div>
@@ -506,6 +519,14 @@ export function SuportePage() {
         chamadoId={chamado?.id}
         condominioId={chamado?.condominio_id}
         onScheduled={() => chamado?.id ? loadChat(chamado.id) : undefined}
+      />
+
+      <EspecificidadeModal
+        open={especModal}
+        chamado={chamado}
+        userId={session.user.id}
+        onClose={() => setEspecModal(false)}
+        onSaved={(valores) => setChamado((prev) => (prev ? { ...prev, ...valores } : prev))}
       />
 
       <Modal

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase, supabaseConfigured } from './supabase';
 import { loadBranding, rememberBrandCondo, forgetBrandCondo } from './branding';
 import { CARGO_LABEL } from './permissions';
@@ -16,6 +16,21 @@ bootstrapPrefs();
 
 const SessionContext = createContext(null);
 const STORAGE_KEY = 'cca.condominio';
+const PORTAL_KEY = 'cca.portalLogin';
+
+function lerPortalLogin() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PORTAL_KEY) || 'null');
+    return raw?.tipo && raw?.id ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+function salvarPortalLogin(portal) {
+  if (portal?.tipo && portal?.id) localStorage.setItem(PORTAL_KEY, JSON.stringify({ tipo: portal.tipo, id: portal.id }));
+  else localStorage.removeItem(PORTAL_KEY);
+}
 
 function metaFlag(value) {
   return value === true || value === 'true' || value === 'gestao_tecnica';
@@ -174,21 +189,15 @@ async function avaliarAcessoLogin(user, { condominioId = '', construtoraId = '' 
 
   if (gestao) return { ok: true };
 
-  const orgId = await construtoraIdDoUsuario(userRow);
-  if (orgId) {
-    const { data: condo } = await supabase
-      .from('condominios')
-      .select('id, construtora_id')
-      .eq('id', condominioId)
-      .maybeSingle();
-    if (sameId(condo?.construtora_id, orgId)) return { ok: true };
-    const rpc = await supabase.rpc('user_is_construtora_org_do_condominio', { cid: condominioId });
-    if (!rpc.error && rpc.data === true) return { ok: true };
-  }
-
-  const belongs = (links || []).some((row) => row.condominio_id === condominioId);
+  const belongs = (links || []).some((row) => sameId(row.condominio_id, condominioId));
   if (!belongs) {
-    return { ok: false, message: 'Sua conta não tem acesso a este condomínio.' };
+    const orgId = await construtoraIdDoUsuario(userRow);
+    return {
+      ok: false,
+      message: orgId
+        ? 'Este e-mail não está cadastrado como usuário deste condomínio. Para entrar como construtora, use a tela de login da construtora.'
+        : 'Sua conta não tem acesso a este condomínio.',
+    };
   }
   return { ok: true };
 }
@@ -306,6 +315,9 @@ export function SessionProvider({ children }) {
   const [isGestaoTecnica, setIsGestaoTecnica] = useState(false);
   const [isAdminSistema, setIsAdminSistema] = useState(false);
   const [construtora, setConstrutora] = useState(null);
+  const [modoConstrutora, setModoConstrutora] = useState(false);
+  const [vinculosDiretos, setVinculosDiretos] = useState([]);
+  const hydrateRef = useRef(null);
   const [condoId, setCondoId] = useState(() => sessionStorage.getItem(STORAGE_KEY) || '');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -329,10 +341,12 @@ export function SessionProvider({ children }) {
         setIsGestaoTecnica(false);
         setIsAdminSistema(false);
         setConstrutora(null);
+        setModoConstrutora(false);
+        setVinculosDiretos([]);
         setFotoUrl('');
         setLoading(false);
         ready.current = true;
-        return;
+        return null;
       }
       setSession(nextSession);
       if (showLoader && !ready.current) setLoading(true);
@@ -355,7 +369,8 @@ export function SessionProvider({ children }) {
       if (!rpc.error) rpcGT = rpc.data === true;
       const admin = detectAdminSistema(userRow, nextSession.user);
       const gestao = detectGestaoTecnica(userRow, nextSession.user, rawLinks) || rpcGT || admin;
-      const org = detectConstrutoraOrg(userRow, gestao);
+      const portal = lerPortalLogin();
+      const org = portal?.tipo !== 'condominio' && detectConstrutoraOrg(userRow, gestao);
       let orgRow = null;
       if (org && userRow?.construtora_id) {
         const found = await supabase
@@ -393,11 +408,13 @@ export function SessionProvider({ children }) {
           ? await loadMemberships(nextSession.user.id, { construtoraId: userRow.construtora_id })
           : { links: rawLinks, error: loadErr };
       if (loaded.error) setError(loaded.error.message);
-      if (!active) return;
+      if (!active) return null;
       setProfile(userRow);
       setIsGestaoTecnica(gestao);
       setIsAdminSistema(admin);
       setConstrutora(orgRow);
+      setModoConstrutora(org);
+      setVinculosDiretos((rawLinks || []).map((row) => row.condominio_id).filter(Boolean));
       setMemberships(loaded.links || []);
       if (userRow?.foto_path) {
         urlFotoPerfil(userRow.foto_path).then((url) => {
@@ -411,7 +428,9 @@ export function SessionProvider({ children }) {
       else if (!precisaDefinirPreferencias(userRow)) aplicarPrefs(lerPrefsLocais() || DEFAULT_PREFS);
       setLoading(false);
       ready.current = true;
+      return { gestao, construtora: org };
     }
+    hydrateRef.current = hydrate;
 
     supabase.auth.getSession().then(({ data }) => {
       if (active) hydrate(data.session, { showLoader: true });
@@ -433,7 +452,7 @@ export function SessionProvider({ children }) {
     };
   }, []);
 
-  const isConstrutoraOrg = Boolean(profile?.construtora_id || construtora?.id) && !isGestaoTecnica;
+  const isConstrutoraOrg = modoConstrutora && !isGestaoTecnica;
 
   const membership = useMemo(() => {
     const selected = memberships.find((item) => item.condominio_id === condoId) || null;
@@ -482,6 +501,7 @@ export function SessionProvider({ children }) {
       isAdminSistema,
       isConstrutoraOrg,
       construtora,
+      vinculosDiretos,
       condo: membership?.condominios || null,
       cargo: cargoFrom(membership) || { tipo: cargoTipo, nome: CARGO_LABEL[cargoTipo] || cargoTipo },
       cargoTipo,
@@ -525,15 +545,28 @@ export function SessionProvider({ children }) {
         setMemberships(links || []);
         return links || [];
       },
+      async trocarPortal(portal) {
+        salvarPortalLogin(portal);
+        const { data } = await supabase.auth.getSession();
+        return hydrateRef.current ? hydrateRef.current(data.session) : null;
+      },
       async signIn(email, password, { condominioId, construtoraId } = {}) {
+        // Gravado antes do login porque o SIGNED_IN dispara a hidratação da sessão imediatamente.
+        salvarPortalLogin(construtoraId
+          ? { tipo: 'construtora', id: construtoraId }
+          : (condominioId ? { tipo: 'condominio', id: condominioId } : null));
         const { data, error: err } = await supabase.auth.signInWithPassword({ email, password });
-        if (err) throw err;
+        if (err) {
+          salvarPortalLogin(null);
+          throw err;
+        }
         if (data.session) await supabase.auth.setSession(data.session);
         const acesso = await avaliarAcessoLogin(data.user, {
           condominioId: condominioId || '',
           construtoraId: construtoraId || '',
         });
         if (!acesso.ok) {
+          salvarPortalLogin(null);
           await supabase.auth.signOut();
           sessionStorage.removeItem(STORAGE_KEY);
           throw new Error(acesso.message);
@@ -551,11 +584,12 @@ export function SessionProvider({ children }) {
         const destino = to || '/login';
         sessionStorage.setItem('cca.logoutTo', destino);
         if (destino === '/login') forgetBrandCondo();
+        salvarPortalLogin(null);
         await supabase.auth.signOut();
         sessionStorage.removeItem(STORAGE_KEY);
       },
     }),
-    [session, profile, memberships, membership, isGestaoTecnica, isAdminSistema, isConstrutoraOrg, construtora, cargoTipo, branding, fotoUrl, loading, error]
+    [session, profile, memberships, membership, isGestaoTecnica, isAdminSistema, isConstrutoraOrg, construtora, vinculosDiretos, cargoTipo, branding, fotoUrl, loading, error]
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

@@ -5,6 +5,7 @@ import { useSession } from '../lib/session';
 import { aplicarEscopoChamados, can, ehCargoAdministracao, ehCargoConstrutora, ehChamadoAdministracao, STATUS_LABEL, statusUi } from '../lib/permissions';
 import { chamadoNumero, embedOne, formatDate, formatTelefone, labelUnidade, maintenanceTone, nomePessoa } from '../lib/format';
 import { mapaLeituraConversas } from '../lib/notifications';
+import { useChatAoVivo } from '../lib/chatAoVivo';
 import { arquivoEhImagem, hidratarNomesMensagens, resolverUrlArquivo, resolverVisitaAgendadaChamado, resumoOperacionalCondominio } from '../lib/api';
 import { previewTextoChat } from '../lib/chamadoRastreabilidade';
 import { Badge, ChamadoAdminTag } from './ui';
@@ -85,13 +86,15 @@ function chamadoDaVez(lista) {
 }
 
 async function carregarMensagensChamado(chamado, condominioId) {
-  if (!chamado?.id) return [];
+  const vazio = { conversaId: null, mensagens: [] };
+  if (!chamado?.id) return vazio;
   const conv = await supabase
     .from('conversas')
     .select('id')
     .eq('chamado_id', chamado.id)
     .maybeSingle();
-  if (conv.error || !conv.data?.id) return [];
+  if (conv.error || !conv.data?.id) return vazio;
+  const conversaId = conv.data.id;
   let msgs = await supabase
     .from('mensagens')
     .select('id, texto, created_at, usuario_id, usuarios:usuario_id(nome)')
@@ -106,16 +109,16 @@ async function carregarMensagensChamado(chamado, condominioId) {
       .order('created_at', { ascending: false })
       .limit(4);
   }
-  if (msgs.error) return [];
+  if (msgs.error) return { conversaId, mensagens: [] };
   const recentes = (msgs.data || []).filter((m) => !m.excluido_em).reverse();
   try {
     const named = await hidratarNomesMensagens(recentes, {
       solicitanteId: chamado.solicitante_id,
       condominioId,
     });
-    return named.mensagens || recentes;
+    return { conversaId, mensagens: named.mensagens || recentes };
   } catch {
-    return recentes;
+    return { conversaId, mensagens: recentes };
   }
 }
 
@@ -181,6 +184,8 @@ export function VisaoGeralPainel() {
   const [boletins, setBoletins] = useState([]);
   const [documentos, setDocumentos] = useState([]);
   const [conversaMsgs, setConversaMsgs] = useState([]);
+  const [conversaDestaqueId, setConversaDestaqueId] = useState(null);
+  const [versao, setVersao] = useState(0);
   const [visitaAtual, setVisitaAtual] = useState(null);
   const [leituraChamados, setLeituraChamados] = useState({});
   const [manutencoes, setManutencoes] = useState([]);
@@ -348,16 +353,18 @@ export function VisaoGeralPainel() {
       setDocumentos(docs);
       if (isMorador) {
         const destaque = chamadoDaVez(listaChamados);
-        const msgs = await carregarMensagensChamado(destaque, condoId);
+        const { conversaId, mensagens: msgs } = await carregarMensagensChamado(destaque, condoId);
         const visita = destaque
           ? await resolverVisitaAgendadaChamado(destaque.id, msgs).catch(() => null)
           : null;
         if (!live) return;
         setConversaMsgs(msgs);
+        setConversaDestaqueId(conversaId);
         setVisitaAtual(visita || null);
         setLeituraChamados(leitura.byChamado || {});
       } else {
         setConversaMsgs([]);
+        setConversaDestaqueId(null);
         setVisitaAtual(null);
         setLeituraChamados({});
       }
@@ -365,7 +372,12 @@ export function VisaoGeralPainel() {
     return () => {
       live = false;
     };
-  }, [condoId, session?.user?.id, verTodosChamados, isMorador, ehConstrutora, cargoTipo, ehAdminCondo]);
+  }, [condoId, session?.user?.id, verTodosChamados, isMorador, ehConstrutora, cargoTipo, ehAdminCondo, versao]);
+
+  useChatAoVivo({
+    conversaId: isMorador ? conversaDestaqueId : null,
+    onAtualizar: () => setVersao((v) => v + 1),
+  });
 
   if (ehConstrutora) {
     return (

@@ -38,6 +38,7 @@ import {
   mapaLeituraConversas,
   marcarConversaLidaPorLaudo,
 } from '../lib/notifications';
+import { assinaturaMensagens, useChatAoVivo } from '../lib/chatAoVivo';
 import {
   loadBranding,
   loginPathDaConstrutora,
@@ -141,6 +142,7 @@ export function ConstrutoraCondoPage() {
   const [laudo, setLaudo] = useState(null);
   const [laudoMsgs, setLaudoMsgs] = useState([]);
   const [laudoLidaAte, setLaudoLidaAte] = useState(null);
+  const [laudoConvId, setLaudoConvId] = useState(null);
   const [anexosLaudo, setAnexosLaudo] = useState([]);
   const [aceite, setAceite] = useState(false);
   const [chamado, setChamado] = useState(null);
@@ -201,6 +203,7 @@ export function ConstrutoraCondoPage() {
       setLaudo(null);
       setLaudoMsgs([]);
       setLaudoLidaAte(null);
+      setLaudoConvId(null);
       setAnexosLaudo([]);
       setAceite(false);
       return;
@@ -228,6 +231,7 @@ export function ConstrutoraCondoPage() {
       const resolved = await Promise.all((abertura || []).map(resolverUrlArquivo));
       setAnexosLaudo(arquivosDoLaudo(data, resolved));
       const convId = await garantirChatLaudo(id, session.user.id);
+      setLaudoConvId(convId || null);
       if (convId) {
         const part = await supabase
           .from('conversa_participantes')
@@ -323,6 +327,17 @@ export function ConstrutoraCondoPage() {
     }
     loadChamado(chamadoId);
   }, [chamadoId, laudoId, isConstrutoraOrg, session?.user?.id]);
+
+  useChatAoVivo({
+    conversaId: isConstrutoraOrg && laudoId ? laudoConvId : null,
+    onAtualizar: () => Promise.all([loadLaudo(laudoId), loadListas()]),
+  });
+
+  useChatAoVivo({
+    chave: isConstrutoraOrg && !laudoId && chamadoId ? `watch-${chamadoId}` : null,
+    assinar: async () => assinaturaMensagens(await listarMensagensChamadoWatch(chamadoId)),
+    onAtualizar: () => Promise.all([loadChamado(chamadoId), loadListas()]),
+  });
 
   useEffect(() => {
     const el = chatLogRef.current;

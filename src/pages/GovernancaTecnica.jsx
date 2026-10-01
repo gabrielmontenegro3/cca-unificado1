@@ -21,6 +21,7 @@ import {
   mapaLeituraConversas,
   marcarConversaLidaPorLaudo,
 } from '../lib/notifications';
+import { useChatAoVivo } from '../lib/chatAoVivo';
 import { Alert, Btn, Empty } from '../components/ui';
 import { Icon } from '../components/icons';
 import { ChatComposer, ChatHeader, CriticidadeTag, LaudoThread, LaudoThumb } from '../components/Chat';
@@ -39,6 +40,7 @@ export function GovernancaTecnicaPage() {
   const [sending, setSending] = useState(false);
   const [leitura, setLeitura] = useState({});
   const [lidaAte, setLidaAte] = useState(null);
+  const [conversaId, setConversaId] = useState(null);
   const chatLogRef = useRef(null);
   const canView = can(cargoTipo, 'view_laudos');
   const canChat = can(cargoTipo, 'chat_laudo');
@@ -64,6 +66,7 @@ export function GovernancaTecnicaPage() {
       setLaudo(null);
       setMensagens([]);
       setLidaAte(null);
+      setConversaId(null);
       return;
     }
     try {
@@ -79,6 +82,7 @@ export function GovernancaTecnicaPage() {
       const convId = canChat
         ? await garantirChatLaudo(laudoId, session.user.id)
         : (await supabase.from('conversas').select('id').eq('laudo_id', laudoId).maybeSingle()).data?.id;
+      setConversaId(convId || null);
       if (!convId) {
         setMensagens([]);
         return;
@@ -120,6 +124,11 @@ export function GovernancaTecnicaPage() {
     if (!canView) return;
     loadChat(id);
   }, [id, canView, session.user.id]);
+
+  useChatAoVivo({
+    conversaId: canView && id ? conversaId : null,
+    onAtualizar: () => Promise.all([loadChat(id), loadLista()]),
+  });
 
   useEffect(() => {
     const el = chatLogRef.current;

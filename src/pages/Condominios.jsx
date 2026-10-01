@@ -281,7 +281,7 @@ function Section({ title, hint, children }) {
 }
 
 export function CondominiosPortal() {
-  const { cargoTipo, memberships, selectCondo, reloadMemberships, session, error: sessionError } = useSession();
+  const { cargoTipo, memberships, selectCondo, reloadMemberships, session, isAdminSistema, error: sessionError } = useSession();
   const navigate = useNavigate();
   const [creating, setCreating] = useState(() => {
     try {
@@ -967,6 +967,15 @@ export function CondominiosPortal() {
                       >
                         Usuários
                       </Btn>
+                      {isAdminSistema ? (
+                        <Btn
+                          variant="ghost"
+                          icon="settings"
+                          onClick={() => navigate(`/admin-geral/condominio/${row.condominio_id}`)}
+                        >
+                          Configurar
+                        </Btn>
+                      ) : null}
                       <Btn onClick={() => openCondo(row.condominio_id)}>
                         Abrir
                       </Btn>

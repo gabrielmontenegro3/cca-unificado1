@@ -19,6 +19,7 @@ import {
   mapaLeituraConversas,
   marcarConversaLidaPorLaudo,
 } from '../lib/notifications';
+import { useChatAoVivo } from '../lib/chatAoVivo';
 import { Alert, Btn, Empty } from '../components/ui';
 import { Icon } from '../components/icons';
 import { GestaoBar } from '../components/GestaoBar';
@@ -39,6 +40,7 @@ export function LaudosGlobaisPage() {
   const [sending, setSending] = useState(false);
   const [leitura, setLeitura] = useState({});
   const [lidaAte, setLidaAte] = useState(null);
+  const [conversaId, setConversaId] = useState(null);
   const chatLogRef = useRef(null);
 
   const condos = useMemo(() => {
@@ -67,6 +69,7 @@ export function LaudosGlobaisPage() {
       setLaudo(null);
       setMensagens([]);
       setLidaAte(null);
+      setConversaId(null);
       return;
     }
     try {
@@ -83,6 +86,7 @@ export function LaudosGlobaisPage() {
       setLaudo(data);
       setError('');
       const convId = await garantirChatLaudo(laudoId, session.user.id);
+      setConversaId(convId || null);
       const part = await supabase
         .from('conversa_participantes')
         .select('ultima_leitura_em')
@@ -122,6 +126,11 @@ export function LaudosGlobaisPage() {
     if (!podeVerGlobais) return;
     loadChat(id);
   }, [id, podeVerGlobais, session?.user?.id]);
+
+  useChatAoVivo({
+    conversaId: podeVerGlobais && id ? conversaId : null,
+    onAtualizar: () => Promise.all([loadChat(id), loadLista()]),
+  });
 
   useEffect(() => {
     const el = chatLogRef.current;

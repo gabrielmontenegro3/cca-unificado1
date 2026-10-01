@@ -24,6 +24,8 @@ import { GestaoTecnicaUsuariosPage } from './pages/GestaoTecnicaUsuarios';
 import { ConfiguracoesPage, NotificacoesPage, OnboardingPreferencias } from './pages/Sistema';
 import { GovernancaTecnicaPage } from './pages/GovernancaTecnica';
 import { MeuImovelPage } from './pages/MeuImovel';
+import { ConfigCondominioPage, ConfigConstrutoraPage } from './pages/ConfiguracaoGeral';
+import { ConstrutoraRelatoriosPage } from './pages/ConstrutoraRelatorios';
 import { Alert, Page } from './components/ui';
 
 function HomeRedirect() {
@@ -80,7 +82,7 @@ function Guard({ children }) {
   )) {
     return <Navigate to="/" replace />;
   }
-  if (pathname.startsWith('/gestao-tecnica') && !isAdminSistema) {
+  if ((pathname.startsWith('/gestao-tecnica') || pathname.startsWith('/admin-geral')) && !isAdminSistema) {
     return <Navigate to="/" replace />;
   }
   if (ehCargoConstrutora(cargoTipo)) {
@@ -148,6 +150,7 @@ function AppLayout() {
       || (isGestaoTecnica && (
         pathname.startsWith('/suporte')
         || pathname.startsWith('/gestao-tecnica')
+        || pathname.startsWith('/admin-geral')
       ))
       || (pathname.startsWith('/notificacoes') && !condoId)
       || (pathname.startsWith('/configuracoes') && !condoId)
@@ -204,6 +207,7 @@ export default function App() {
         <Route path="laudos/:id" element={<LaudoDetalhePage />} />
         <Route path="governanca-tecnica" element={<GovernancaTecnicaPage />} />
         <Route path="governanca-tecnica/:id" element={<GovernancaTecnicaPage />} />
+        <Route path="construtora-relatorios" element={<ConstrutoraRelatoriosPage />} />
         <Route path="construtora/:condoId" element={<ConstrutoraCondoPage />} />
         <Route path="construtora/:condoId/ocorrencias/:chamadoId" element={<ConstrutoraCondoPage />} />
         <Route path="construtora/:condoId/governanca/:laudoId" element={<ConstrutoraCondoPage />} />
@@ -214,6 +218,8 @@ export default function App() {
         <Route path="laudos-globais" element={<LaudosGlobaisPage />} />
         <Route path="laudos-globais/:id" element={<LaudosGlobaisPage />} />
         <Route path="gestao-tecnica" element={<GestaoTecnicaUsuariosPage />} />
+        <Route path="admin-geral/condominio/:id" element={<ConfigCondominioPage />} />
+        <Route path="admin-geral/construtora/:id" element={<ConfigConstrutoraPage />} />
         <Route path="configuracoes" element={<ConfiguracoesPage />} />
         <Route path="notificacoes" element={<NotificacoesPage />} />
         <Route path="usuarios" element={<UsuariosPage />} />

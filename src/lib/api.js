@@ -634,6 +634,167 @@ export async function criarConstrutora(form) {
   return id;
 }
 
+const TITULOS_IMAGEM_MARCA = {
+  logo: ['logo'],
+  capa: ['imagem capa', 'capa'],
+  visao_geral: ['imagem visão geral', 'imagem visao geral', 'visão geral', 'visao geral'],
+  login: ['imagem login', 'login'],
+};
+
+const TITULO_PADRAO_MARCA = {
+  logo: 'Logo',
+  capa: 'Imagem capa',
+  visao_geral: 'Imagem visão geral',
+  login: 'Imagem login',
+};
+
+function textoOuNulo(value) {
+  const text = String(value ?? '').trim();
+  return text || null;
+}
+
+function extensaoArquivo(file, padrao = 'jpg') {
+  return (String(file?.name || '').split('.').pop() || padrao).toLowerCase().replace(/[^a-z0-9]/g, '') || padrao;
+}
+
+export async function carregarConfigCondominio(condoId) {
+  if (!condoId) throw new Error('Condomínio inválido.');
+  const [{ data: condo, error }, { data: endereco }] = await Promise.all([
+    supabase.from('condominios').select('*').eq('id', condoId).maybeSingle(),
+    supabase.from('enderecos').select('*').eq('condominio_id', condoId).limit(1).maybeSingle(),
+  ]);
+  if (error) throw new Error(formatDbError(error, 'condominios'));
+  if (!condo) throw new Error('Condomínio não encontrado.');
+  return { condo, endereco: endereco || null };
+}
+
+export async function salvarConfigCondominio(condoId, form) {
+  if (!condoId) throw new Error('Condomínio inválido.');
+  const nome = String(form?.nome || '').trim();
+  if (nome.length < 2) throw new Error('Informe o nome do condomínio.');
+
+  const payload = {
+    nome,
+    cnpj: normalizarCnpj(form?.cnpj) || null,
+    email: textoOuNulo(form?.email),
+    descricao: textoOuNulo(form?.descricao),
+    ativo: form?.ativo !== false,
+  };
+  let { error } = await supabase.from('condominios').update(payload).eq('id', condoId);
+  if (error && isMissingColumnError(error)) {
+    const { email: _email, ...semEmail } = payload;
+    ({ error } = await supabase.from('condominios').update(semEmail).eq('id', condoId));
+  }
+  if (error) throw new Error(formatDbError(error, 'condominios'));
+
+  const construtoraId = form?.construtora_id || null;
+  if (construtoraId !== (form?.construtora_id_original || null)) {
+    const rpc = construtoraId
+      ? await supabase.rpc('vincular_condominio_a_construtora', {
+        p_condominio_id: condoId,
+        p_construtora_id: construtoraId,
+      })
+      : { error: { message: 'sem rpc' } };
+    if (rpc.error) {
+      const link = await supabase.from('condominios').update({ construtora_id: construtoraId }).eq('id', condoId);
+      if (link.error) throw new Error(formatDbError(link.error, 'condominios'));
+    }
+  }
+
+  const endereco = {
+    cep: textoOuNulo(form?.cep),
+    logradouro: textoOuNulo(form?.logradouro),
+    numero: textoOuNulo(form?.numero),
+    complemento: textoOuNulo(form?.complemento),
+    bairro: textoOuNulo(form?.bairro),
+    cidade: textoOuNulo(form?.cidade),
+    estado: textoOuNulo(form?.estado),
+  };
+  const temEndereco = Object.values(endereco).some(Boolean);
+  if (form?.endereco_id) {
+    const up = await supabase.from('enderecos').update(endereco).eq('id', form.endereco_id);
+    if (up.error) throw new Error(formatDbError(up.error, 'enderecos'));
+  } else if (temEndereco) {
+    const ins = await supabase.from('enderecos').insert({ condominio_id: condoId, pais: 'Brasil', ...endereco });
+    if (ins.error) throw new Error(formatDbError(ins.error, 'enderecos'));
+  }
+}
+
+export async function trocarImagemCondominio({ condoId, userId, tipo, file }) {
+  if (!condoId || !file || !TITULOS_IMAGEM_MARCA[tipo]) return null;
+  const arquivo = await uploadArquivo({
+    condominioId: condoId,
+    userId,
+    file,
+    folder: 'marca',
+    fileName: `${tipo}-${Date.now()}.${extensaoArquivo(file)}`,
+    quality: tipo === 'capa' || tipo === 'logo' ? 'original' : 'compact',
+  });
+
+  const titulos = TITULOS_IMAGEM_MARCA[tipo];
+  const { data: antigas } = await supabase
+    .from('imagens_condominio')
+    .select('id, tipo, titulo')
+    .eq('condominio_id', condoId);
+  const idsAntigos = (antigas || [])
+    .filter((row) => row.tipo === tipo || titulos.includes(String(row.titulo || '').trim().toLowerCase()))
+    .map((row) => row.id);
+  if (idsAntigos.length) {
+    await supabase.from('imagens_condominio').delete().in('id', idsAntigos);
+  }
+
+  const row = { condominio_id: condoId, arquivo_id: arquivo.id, titulo: TITULO_PADRAO_MARCA[tipo], ordem: 0 };
+  const first = await supabase.from('imagens_condominio').insert({ ...row, tipo });
+  if (first.error) {
+    const fallback = await supabase.from('imagens_condominio').insert(row);
+    if (fallback.error) throw new Error(formatDbError(fallback.error, 'imagens_condominio'));
+  }
+  if (tipo === 'logo') {
+    await supabase.from('condominios').update({ logo_path: arquivo.storage_path }).eq('id', condoId);
+  }
+  return arquivo;
+}
+
+export async function carregarConfigConstrutora(id) {
+  if (!id) throw new Error('Construtora inválida.');
+  const { data, error } = await supabase.from('construtoras').select('*').eq('id', id).maybeSingle();
+  if (error) throw new Error(formatDbError(error, 'construtoras'));
+  if (!data) throw new Error('Construtora não encontrada.');
+  return data;
+}
+
+export async function salvarConfigConstrutora(id, form) {
+  if (!id) throw new Error('Construtora inválida.');
+  const razaoSocial = String(form?.razao_social || '').trim();
+  const nomeFantasia = String(form?.nome_fantasia || '').trim();
+  if (razaoSocial.length < 2) throw new Error('Informe a razão social da construtora.');
+  if (nomeFantasia.length < 2) throw new Error('Informe o nome fantasia da construtora.');
+  const { error } = await supabase.from('construtoras').update({
+    nome: nomeFantasia,
+    nome_fantasia: nomeFantasia,
+    razao_social: razaoSocial,
+    cnpj: normalizarCnpj(form?.cnpj) || null,
+    email: textoOuNulo(form?.email),
+    descricao: textoOuNulo(form?.descricao),
+    ativo: form?.ativo !== false,
+    updated_at: new Date().toISOString(),
+  }).eq('id', id);
+  if (error) throw new Error(formatDbError(error, 'construtoras'));
+}
+
+export async function trocarLogoConstrutora(id, file) {
+  if (!id || !file) return null;
+  const path = `${id}/marca/logo-${Date.now()}.${extensaoArquivo(file, 'png')}`;
+  const up = await supabase.storage.from('condominios').upload(path, file, {
+    upsert: true,
+    contentType: file.type || undefined,
+  });
+  if (up.error) throw up.error;
+  const { error } = await supabase.from('construtoras').update({ logo_path: path }).eq('id', id);
+  if (error) throw new Error(formatDbError(error, 'construtoras'));
+  return path;
+}
+
 export async function salvarDominioConstrutora(id, dominio) {
   if (!id) throw new Error('Construtora inválida.');
   const rpc = await supabase.rpc('salvar_dominio_construtora', {
@@ -792,7 +953,7 @@ export async function criarChamado({ condominioId, userId, titulo, descricao, fi
       const { data: msg } = await supabase.from('mensagens').insert({
         conversa_id: convId,
         usuario_id: userId,
-        texto: 'Imagem',
+        texto: String(descricao || '').trim() || 'Imagem',
       }).select('id').single();
       if (msg?.id) {
         await supabase.from('mensagem_arquivos').insert(
@@ -1883,21 +2044,28 @@ export async function listarArquivosAberturaChamado(chamadoId) {
 export async function juntarMensagensComAbertura(chamado, mensagens) {
   const list = mensagens || [];
   if (!chamado?.id) return list;
+  const descricao = String(chamado.descricao || '').trim();
   let arquivos = [];
   try {
     arquivos = await listarArquivosAberturaChamado(chamado.id);
   } catch {
-    return list;
+    arquivos = [];
   }
   const withUrl = (await Promise.all((arquivos || []).map(resolverUrlArquivo))).filter((file) => file?.id);
-  if (!withUrl.length) return list;
 
   const aberturaIds = new Set(withUrl.map((file) => file.id));
+  let descricaoNoChat = Boolean(descricao) && list.some((m) => String(m.texto || '').trim() === descricao);
   const marked = list.map((m) => {
     const anexos = m.anexos || [];
     const ids = anexos.map((a) => a.id).filter(Boolean);
     const ehAbertura = ids.length > 0 && ids.every((id) => aberturaIds.has(id));
-    return ehAbertura ? { ...m, abertura: true } : m;
+    if (!ehAbertura) return m;
+    const texto = String(m.texto || '').trim();
+    if (descricao && !descricaoNoChat && (!texto || /^imagem$/i.test(texto))) {
+      descricaoNoChat = true;
+      return { ...m, texto: descricao, abertura: true };
+    }
+    return { ...m, abertura: true };
   });
 
   const seen = new Set();
@@ -1908,14 +2076,14 @@ export async function juntarMensagensComAbertura(chamado, mensagens) {
     }
   }
   const extras = withUrl.filter((file) => !seen.has(file.id) && !seen.has(file.storage_path));
-  if (!extras.length) return marked;
+  if (!extras.length && (descricaoNoChat || !descricao)) return marked;
 
   return [
     {
       id: `abertura-${chamado.id}`,
       usuario_id: chamado.solicitante_id,
       usuarios: embedOne(chamado.usuarios) || null,
-      texto: '',
+      texto: descricaoNoChat ? '' : descricao,
       created_at: chamado.created_at,
       anexos: extras,
       abertura: true,

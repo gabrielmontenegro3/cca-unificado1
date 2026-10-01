@@ -23,9 +23,10 @@ export function LoginPage() {
     isGestaoTecnica,
     isConstrutoraOrg,
     construtora,
-    memberships,
+    vinculosDiretos,
     profile,
     loading,
+    trocarPortal,
   } = useSession();
   const navigate = useNavigate();
   const { condoId: condoParam } = useParams();
@@ -112,9 +113,7 @@ export function LoginPage() {
   const pertenceAoPortal = isGestaoTecnica
     || (isConstrutoraLogin
       ? Boolean(construtoraAtualId) && String(construtoraAtualId).toLowerCase() === String(targetConstrutoraId).toLowerCase()
-      : memberships.some((item) => item.condominio_id === targetCondoId) || (
-        Boolean(construtoraAtualId) && memberships.some((item) => item.condominio_id === targetCondoId)
-      ));
+      : (vinculosDiretos || []).includes(targetCondoId));
 
   if (session && !loading && !isPortalLogin) {
     return <Navigate to={isGestaoTecnica || isConstrutoraOrg ? '/' : '/visao-geral'} replace />;
@@ -137,19 +136,26 @@ export function LoginPage() {
     }
   }
 
-  function enterPortal() {
+  async function enterPortal() {
     if (!pertenceAoPortal) {
       setError(isConstrutoraLogin
         ? 'Sua conta não tem acesso a esta construtora.'
         : 'Sua conta não tem acesso a este condomínio.');
       return;
     }
-    if (isConstrutoraLogin) {
-      navigate('/');
-      return;
+    setBusy(true);
+    try {
+      if (isConstrutoraLogin) {
+        await trocarPortal({ tipo: 'construtora', id: targetConstrutoraId });
+        navigate('/');
+        return;
+      }
+      const modo = await trocarPortal({ tipo: 'condominio', id: targetCondoId });
+      selectCondo(targetCondoId);
+      navigate(modo?.construtora ? '/governanca-tecnica' : '/visao-geral');
+    } finally {
+      setBusy(false);
     }
-    selectCondo(targetCondoId);
-    navigate(isConstrutoraOrg ? '/governanca-tecnica' : '/visao-geral');
   }
 
   const nome = isPortalLogin
@@ -193,7 +199,7 @@ export function LoginPage() {
               {pertenceAoPortal ? (
                 <>
                   <p className="muted">Você já está autenticado. Esta é a tela de login de {nome}.</p>
-                  <Btn icon="building" onClick={enterPortal}>
+                  <Btn icon="building" onClick={enterPortal} disabled={busy}>
                     {isConstrutoraLogin ? 'Entrar neste portal' : 'Entrar neste condomínio'}
                   </Btn>
                 </>
