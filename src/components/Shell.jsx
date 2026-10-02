@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { NavLink, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useSession } from '../lib/session';
-import { ehCargoConstrutora, navGroupsFor } from '../lib/permissions';
+import { CARGO_LABEL, ehCargoConstrutora, navGroupsFor } from '../lib/permissions';
 import { BrandLogo, UserAvatar } from './ui';
 import { Icon } from './icons';
 import { loginPathDaConstrutora, loginPathDoCondominio, nomeExibicaoConstrutora } from '../lib/branding';
@@ -109,7 +109,9 @@ function NavGroup({ group, open, active, playToken, onToggle }) {
         aria-expanded={open}
       >
         <span className="nav-group-label">
-          <Icon name={group.icon} size={18} />
+          <span className="nav-group-icon" aria-hidden="true">
+            <Icon name={group.icon} size={18} />
+          </span>
           {group.label}
         </span>
         <Icon name="chevron" size={16} className={`nav-group-chevron${open ? ' open' : ''}`} />
@@ -197,6 +199,7 @@ export function Shell() {
           <BrandLogo src={branding?.logo} name={branding?.nome || condo?.nome} />
           <span className="brand-copy">
             <strong>{branding?.nome || condo?.nome || 'CCA'}</strong>
+            {CARGO_LABEL[cargoTipo] ? <small>{CARGO_LABEL[cargoTipo]}</small> : null}
           </span>
         </div>
         <nav className="side-nav">
