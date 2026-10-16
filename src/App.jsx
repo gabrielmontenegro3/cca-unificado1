@@ -26,6 +26,7 @@ import { GovernancaTecnicaPage } from './pages/GovernancaTecnica';
 import { MeuImovelPage } from './pages/MeuImovel';
 import { ConfigCondominioPage, ConfigConstrutoraPage } from './pages/ConfiguracaoGeral';
 import { ConstrutoraRelatoriosPage } from './pages/ConstrutoraRelatorios';
+import { ConstrutoraIndicativosPage } from './pages/ConstrutoraIndicativos';
 import { Alert, Page } from './components/ui';
 
 function HomeRedirect() {
@@ -208,6 +209,7 @@ export default function App() {
         <Route path="governanca-tecnica" element={<GovernancaTecnicaPage />} />
         <Route path="governanca-tecnica/:id" element={<GovernancaTecnicaPage />} />
         <Route path="construtora-relatorios" element={<ConstrutoraRelatoriosPage />} />
+        <Route path="construtora-indicativos" element={<ConstrutoraIndicativosPage />} />
         <Route path="construtora/:condoId" element={<ConstrutoraCondoPage />} />
         <Route path="construtora/:condoId/ocorrencias/:chamadoId" element={<ConstrutoraCondoPage />} />
         <Route path="construtora/:condoId/governanca/:laudoId" element={<ConstrutoraCondoPage />} />

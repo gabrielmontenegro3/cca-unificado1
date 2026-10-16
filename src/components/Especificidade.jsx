@@ -146,7 +146,7 @@ function caminhoLado(cx, cy, rx, ry, profundidade, a0, a1) {
     .join(' ');
 }
 
-export function GraficoPizza({ titulo, opcoes, contagem, animar = true }) {
+export function GraficoPizza({ titulo, opcoes, contagem, animar = true, compacto = false }) {
   const uid = useId().replace(/:/g, '');
   const [ativa, setAtiva] = useState('');
   const itens = opcoes.map((op, index) => ({
@@ -180,7 +180,7 @@ export function GraficoPizza({ titulo, opcoes, contagem, animar = true }) {
   });
 
   return (
-    <section className={`grafico grafico--pizza${animar ? ' is-animado' : ''}`}>
+    <section className={`grafico grafico--pizza${compacto ? ' grafico--mini' : ''}${animar ? ' is-animado' : ''}`}>
       <header className="grafico-head">
         <h4>{titulo}</h4>
         <span>{soma} classificado(s)</span>
@@ -224,6 +224,7 @@ export function GraficoPizza({ titulo, opcoes, contagem, animar = true }) {
             ))}
             <ellipse className="pizza-brilho" clipPath={`url(#pizza-disco-${uid})`} cx={cx - 8} cy={cy - 10} rx={rx * 0.55} ry={ry * 0.34} />
           </svg>
+          {compacto ? null : (
           <ul className="pizza-legenda">
             {ordenados.map((item) => {
               const pct = soma ? Math.round((item.n / soma) * 100) : 0;
@@ -241,6 +242,7 @@ export function GraficoPizza({ titulo, opcoes, contagem, animar = true }) {
               );
             })}
           </ul>
+          )}
         </div>
       ) : (
         <p className="pizza-vazio">Nenhum chamado classificado neste grupo.</p>
@@ -249,14 +251,21 @@ export function GraficoPizza({ titulo, opcoes, contagem, animar = true }) {
   );
 }
 
-export function GraficosEspecificidade({ resumo, animar = true }) {
+export function GraficosEspecificidade({ resumo, animar = true, compacto = false }) {
   if (!resumo?.classificados) {
     return <Empty text="Nenhum chamado classificado ainda neste condomínio." />;
   }
   return (
-    <div className="graficos-grid">
+    <div className={compacto ? 'graficos-compacto' : 'graficos-grid'}>
       {CAMPOS_ESPECIFICIDADE.map(({ campo, titulo, opcoes }) => (
-        <GraficoPizza key={campo} titulo={titulo} opcoes={opcoes} contagem={resumo[campo]} animar={animar} />
+        <GraficoPizza
+          key={campo}
+          titulo={titulo}
+          opcoes={opcoes}
+          contagem={resumo[campo]}
+          animar={animar}
+          compacto={compacto}
+        />
       ))}
     </div>
   );

@@ -21,8 +21,6 @@ import { copiarTexto } from '../lib/parseSeed';
 import { conviteUrl, dominioUrlDoCondominio, loadBranding, loadBrandingConstrutora, loginUrlDaConstrutora, nomeExibicaoConstrutora } from '../lib/branding';
 import { DetailFields, Modal } from '../components/DataList';
 import { ESCOPO_TODOS, EscopoCondominios, FotoPicker, validarEscopo } from '../components/UsuarioCampos';
-import { EspecificidadeCarrossel } from '../components/Especificidade';
-import { resumoEspecificidades } from '../lib/especificidade';
 
 const EMPTY_FORM = {
   razao_social: '',
@@ -732,36 +730,6 @@ export function ConstrutoraPortal() {
     return () => { live = false; };
   }, [lista]);
 
-  const [resumo, setResumo] = useState(null);
-  const [resumoErro, setResumoErro] = useState('');
-
-  useEffect(() => {
-    let live = true;
-    const ids = lista.map((row) => row.condominio_id).filter(Boolean);
-    if (!ids.length) {
-      setResumo({});
-      return undefined;
-    }
-    resumoEspecificidades(ids)
-      .then((next) => {
-        if (!live) return;
-        setResumo(next);
-        setResumoErro('');
-      })
-      .catch((err) => {
-        if (!live) return;
-        setResumo(null);
-        setResumoErro(err.message || '');
-      });
-    return () => { live = false; };
-  }, [lista]);
-
-  const slides = useMemo(() => (resumo ? lista.map((row) => ({
-    id: row.condominio_id,
-    nome: row.condominios?.nome || 'Condomínio',
-    resumo: resumo[row.condominio_id],
-  })) : []), [lista, resumo]);
-
   function entrar(id) {
     selectCondo(id);
     navigate(`/construtora/${id}`);
@@ -778,13 +746,6 @@ export function ConstrutoraPortal() {
           <h1 className="portal-hero-title">{nome}</h1>
         </div>
         <Alert error={sessionError} />
-        {slides.length ? (
-          <EspecificidadeCarrossel
-            slides={slides}
-            onVerRelatorios={(condoId) => navigate(`/construtora-relatorios?condo=${condoId}`)}
-          />
-        ) : null}
-        {resumoErro ? <p className="hint">{resumoErro}</p> : null}
         {!lista.length ? (
           <div className="panel">
             <Empty text="Nenhum condomínio vinculado a esta construtora." />

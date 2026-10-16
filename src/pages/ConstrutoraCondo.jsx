@@ -44,17 +44,10 @@ import {
   loginPathDaConstrutora,
   nomeExibicaoConstrutora,
 } from '../lib/branding';
-import { CAMPOS_ESPECIFICIDADE, labelEspecificidade, resumoEspecificidades } from '../lib/especificidade';
-import { GraficosEspecificidade } from '../components/Especificidade';
 import { Alert, APP_LOGO, Badge, Btn, ChamadoAdminBanner, ChamadoAdminTag, Empty, UserAvatar } from '../components/ui';
 import { Icon } from '../components/icons';
 import { ChatComposer, ChatHeader, ChatLog, LaudoThread, LaudoThumb } from '../components/Chat';
 import { UnreadOrb } from '../components/UnreadOrb';
-
-function maisFrequente(contagem, campo) {
-  const [valor, n] = Object.entries(contagem || {}).sort((a, b) => b[1] - a[1])[0] || [];
-  return valor ? { label: labelEspecificidade(campo, valor), n } : null;
-}
 
 function termoKey(userId, laudoId) {
   return `cca.termoLaudo.${userId}.${laudoId}`;
@@ -159,8 +152,6 @@ export function ConstrutoraCondoPage() {
   const [chamadoLidaAte, setChamadoLidaAte] = useState(null);
   const [texto, setTexto] = useState('');
   const [sending, setSending] = useState(false);
-  const [especResumo, setEspecResumo] = useState(null);
-  const [especErro, setEspecErro] = useState('');
   const chatLogRef = useRef(null);
 
   const membership = (memberships || []).find((row) => row.condominio_id === condoParam);
@@ -323,30 +314,6 @@ export function ConstrutoraCondoPage() {
   }, [isConstrutoraOrg, condoParam]);
 
   useEffect(() => {
-    if (!isConstrutoraOrg || !condoParam) return undefined;
-    let live = true;
-    setEspecResumo(null);
-    setEspecErro('');
-    resumoEspecificidades([condoParam])
-      .then((map) => {
-        if (!live) return;
-        setEspecResumo(map[condoParam] || {
-          total: 0,
-          classificados: 0,
-          local_problema: {},
-          subsistema: {},
-          tipo_problema: {},
-        });
-      })
-      .catch((err) => {
-        if (!live) return;
-        setEspecResumo(null);
-        setEspecErro(err.message || 'Não foi possível carregar os gráficos de especificidade.');
-      });
-    return () => { live = false; };
-  }, [isConstrutoraOrg, condoParam]);
-
-  useEffect(() => {
     if (!isConstrutoraOrg) return;
     loadLaudo(laudoId);
   }, [laudoId, isConstrutoraOrg, session?.user?.id]);
@@ -490,60 +457,6 @@ export function ConstrutoraCondoPage() {
       </header>
 
       <Alert error={error} />
-
-      {!laudoId && !chamadoId ? (
-        <section className="ct-espec panel">
-          <header className="ct-espec-head">
-            <div>
-              <span className="espec-carrossel-kicker">Especificidade dos chamados</span>
-              <h2>Indicadores deste condomínio</h2>
-              <p className="hint" style={{ margin: 0 }}>
-                Local, subsistema e tipo de problema classificados pela Gestão Técnica no atendimento.
-              </p>
-            </div>
-            <Btn
-              variant="ghost"
-              icon="layers"
-              onClick={() => navigate(`/construtora-relatorios?condo=${condoParam}`)}
-            >
-              Ver relatórios
-            </Btn>
-          </header>
-          {especErro ? <p className="hint">{especErro}</p> : null}
-          {!especResumo && !especErro ? (
-            <p className="muted">Carregando gráficos…</p>
-          ) : especResumo ? (
-            <>
-              <div className="relatorios-cards ct-espec-cards">
-                <div className="relatorio-card">
-                  <span>Chamados</span>
-                  <strong>{especResumo.total}</strong>
-                </div>
-                <div className="relatorio-card">
-                  <span>Classificados</span>
-                  <strong>{especResumo.classificados}</strong>
-                  <small>
-                    {especResumo.total
-                      ? `${Math.round((especResumo.classificados / especResumo.total) * 100)}% do total`
-                      : '0% do total'}
-                  </small>
-                </div>
-                {CAMPOS_ESPECIFICIDADE.map(({ campo, titulo }) => {
-                  const top = maisFrequente(especResumo[campo], campo);
-                  return (
-                    <div key={campo} className="relatorio-card">
-                      <span>{titulo} mais frequente</span>
-                      <strong className="relatorio-card-texto">{top?.label || '—'}</strong>
-                      {top ? <small>{top.n} chamado(s)</small> : null}
-                    </div>
-                  );
-                })}
-              </div>
-              <GraficosEspecificidade resumo={especResumo} />
-            </>
-          ) : null}
-        </section>
-      ) : null}
 
       <div className="ct-split">
         <section className="ct-pane ct-pane--gov">

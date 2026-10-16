@@ -9132,6 +9132,47 @@ html[data-theme="escuro"] .cfg-imagem-box {
   color: var(--muted);
   font-size: 13px;
 }
+.graficos-compacto {
+  display: grid;
+  grid-template-columns: repeat(3, 132px);
+  gap: 6px;
+  width: max-content;
+  max-width: 100%;
+  padding: 8px;
+  border-radius: 16px;
+  border: 1px solid rgba(44, 92, 79, 0.12);
+  background: rgba(44, 92, 79, 0.04);
+}
+.grafico--mini {
+  padding: 4px 4px 2px;
+  background: transparent;
+  border: 0;
+}
+.grafico--mini .grafico-head {
+  justify-content: center;
+  margin-bottom: 0;
+}
+.grafico--mini .grafico-head h4 {
+  font-size: 11px;
+  text-align: center;
+}
+.grafico--mini .grafico-head span {
+  display: none;
+}
+.grafico--mini .pizza-svg {
+  width: 108px;
+  margin: 0 auto;
+}
+.grafico--mini .pizza-vazio {
+  margin: 8px 0;
+  font-size: 11px;
+}
+@media (max-width: 720px) {
+  .graficos-compacto {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+  }
+}
 @keyframes pizza-entra {
   from { opacity: 0; transform: translateY(14px) scale(0.94); }
   to { opacity: 1; transform: none; }
