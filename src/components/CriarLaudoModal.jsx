@@ -69,6 +69,7 @@ export function CriarLaudoModal({ open, onClose, chamado }) {
         <Alert error={error} />
         <p className="hint">
           O laudo abre um acompanhamento só entre a Gestão Técnica e a Construtora.
+          No chamado, o morador vê o status Laudo direcionado, aguardando a resposta da construtora.
           {' '}
           <strong>
             {unidade || 'Unidade'}

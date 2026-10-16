@@ -52,16 +52,19 @@ export function parseNamedList(text, keys) {
 }
 
 export function parseCatalogoLinhas(text) {
-  return parseNamedList(text, ['fornecedor', 'material', 'local', 'garantia']);
+  return parseNamedList(text, ['fornecedor', 'material', 'local']);
 }
+
+const MATERIAIS_KEYS = [
+  'nome', 'prazo_valor', 'prazo_unidade', 'data_fim', 'motivos_perda_garantia', 'descricao', 'telefone',
+];
 
 /** Padrões só com linhas de exemplo — sem título e sem cabeçalho. */
 export const PADROES = {
-  catalogo: '[fornecedor] | [material] | [local] | [garantia]',
+  catalogo: '[fornecedor] | [material] | [local]',
   fornecedores: '[nome] | [cnpj] | [vendedor] | [tel vendedor] | [telefone1] | [telefone2] | [localizacao]',
-  materiais: '[nome]',
+  materiais: '[nome] | [tempo] | [dias|meses|anos] | [data final AAAA-MM-DD] | [perda da garantia] | [descricao] | [telefone]',
   locais: '[nome] | [descricao] | [privativa|comum]',
-  garantias: '[nome] | [tempo] | [dias|meses|anos] | [data final AAAA-MM-DD] | [perda da garantia] | [descricao] | [telefone]',
   contatos: '[nome] | [telefone] | [email] | [subtitulo]',
   usuarios: '[nome] | [email] | [cargo]',
 };
@@ -74,8 +77,6 @@ export const PADRAO_COMPLETO = [
   PADROES.materiais,
   '',
   PADROES.locais,
-  '',
-  PADROES.garantias,
 ].join('\n');
 
 export const EMPTY_UNIDADE_CONFIG = {
@@ -258,6 +259,59 @@ export function uniqueFornecedoresFromForm(form) {
   );
 }
 
+function materialTemGarantia(row) {
+  if (!row) return false;
+  return Boolean(
+    (row.prazo_valor != null && String(row.prazo_valor).trim() !== '')
+    || String(row.data_fim || '').trim()
+    || String(row.motivos_perda_garantia || '').trim()
+    || String(row.descricao || '').trim()
+    || String(row.telefone || '').trim(),
+  );
+}
+
+export function uniqueMateriais(rows = [], linhasBase = []) {
+  const map = new Map();
+  for (const row of rows) {
+    const nome = String(row?.nome || '').trim();
+    if (!nome || isPlaceholder(nome)) continue;
+    const key = nomeEmpresaKey(nome);
+    if (!key) continue;
+    const prev = map.get(key);
+    if (!prev) {
+      map.set(key, {
+        nome,
+        prazo_valor: row.prazo_valor || '',
+        prazo_unidade: row.prazo_unidade || '',
+        data_fim: row.data_fim || '',
+        motivos_perda_garantia: row.motivos_perda_garantia || '',
+        descricao: row.descricao || '',
+        telefone: row.telefone || '',
+      });
+      continue;
+    }
+    for (const field of MATERIAIS_KEYS.slice(1)) {
+      if (!prev[field] && row[field]) prev[field] = row[field];
+    }
+  }
+  for (const linha of linhasBase) {
+    const nome = String(linha?.material || '').trim();
+    if (!nome || isPlaceholder(nome)) continue;
+    const key = nomeEmpresaKey(nome);
+    if (!key || map.has(key)) continue;
+    map.set(key, {
+      nome,
+      prazo_valor: '',
+      prazo_unidade: '',
+      data_fim: '',
+      motivos_perda_garantia: '',
+      descricao: '',
+      telefone: '',
+    });
+  }
+  return [...map.values()];
+}
+
 export function buildCondoSeed(form) {
   const fromConfig = form?.unidade_config ? gerarUnidadesDoConfig(form.unidade_config) : [];
   const fromText = parseNamedList(form.unidades_texto, ['identificacao', 'bloco', 'andar']);
@@ -266,6 +320,10 @@ export function buildCondoSeed(form) {
     parseNamedList(form.fornecedores_texto, [
       'nome', 'cnpj', 'contato', 'telefone', 'telefone1', 'telefone2', 'localizacao',
     ]),
+    linhasBase,
+  );
+  const materiais = uniqueMateriais(
+    parseNamedList(form.materiais_texto, MATERIAIS_KEYS),
     linhasBase,
   );
   return {
@@ -278,14 +336,12 @@ export function buildCondoSeed(form) {
     email: (form.email || '').trim(),
     linhas_base: linhasBase,
     fornecedores,
-    materiais: parseNamedList(form.materiais_texto, ['nome']),
+    materiais,
     locais: parseNamedList(form.locais_texto, ['nome', 'descricao', 'area']).map((row) => ({
       ...row,
       area: areaForLocal(row.nome, row.descricao, row.area),
     })),
-    garantias: parseNamedList(form.garantias_texto, [
-      'nome', 'prazo_valor', 'prazo_unidade', 'data_fim', 'motivos_perda_garantia', 'descricao', 'telefone',
-    ]),
+    garantias: [],
     unidades: fromConfig.length ? fromConfig : fromText,
     contatos: parseNamedList(form.contatos_texto, ['nome', 'telefone', 'email', 'subtitulo']),
     usuarios: parseNamedList(form.usuarios_texto, ['nome', 'email', 'cargo']),
@@ -385,7 +441,7 @@ export function resumoCriacaoCondominio(form) {
     fornecedores: seed.fornecedores.length,
     materiais: seed.materiais.length,
     locais: seed.locais.length,
-    garantias: seed.garantias.length,
+    garantias: seed.materiais.filter(materialTemGarantia).length,
     unidades: seed.unidades.length,
     contatos: seed.contatos.length,
     usuarios: seed.usuarios.length,

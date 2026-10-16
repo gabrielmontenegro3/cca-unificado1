@@ -48,6 +48,10 @@ const FIELD_PLACEHOLDERS = {
   },
   materiais: {
     nome: 'Ex.: Porcelanato 60x60',
+    prazo_valor: '5',
+    motivos_perda_garantia: 'Casos em que a garantia é perdida…',
+    descricao: 'Detalhes da cobertura da garantia',
+    telefone: '(11) 3000-0000',
   },
   locais: {
     nome: 'Ex.: Hall de entrada',
@@ -65,7 +69,7 @@ const FIELD_PLACEHOLDERS = {
 /** Campos sempre exibidos no detalhe, mesmo vazios. */
 const DETAIL_ALWAYS = {
   fornecedores: ['razao_social', 'nome_fantasia', 'cnpj', 'localizacao'],
-  materiais: ['nome'],
+  materiais: ['nome', 'prazo_valor', 'data_fim', 'motivos_perda_garantia', 'descricao', 'telefone'],
   locais: ['nome', 'descricao', 'area'],
   garantias: ['nome', 'prazo_valor', 'data_fim', 'motivos_perda_garantia', 'descricao', 'telefone'],
 };
@@ -81,7 +85,7 @@ const CONFIG = {
   },
   materiais: {
     title: 'Materiais',
-    fields: ['nome'],
+    fields: ['nome', 'prazo_valor', 'prazo_unidade', 'data_fim', 'motivos_perda_garantia', 'descricao', 'telefone'],
     path: '/materiais',
     createTitle: 'Novo material',
     searchHint: 'Pesquisar material…',
@@ -105,6 +109,8 @@ const CONFIG = {
 function labelOf(key, table) {
   if (table === 'fornecedores' && key === 'telefone') return 'Telefone do vendedor';
   if (table === 'fornecedores' && key === 'contato') return 'Vendedor';
+  if (table === 'materiais' && key === 'telefone') return 'Telefone da garantia';
+  if (table === 'materiais' && key === 'descricao') return 'Descrição da garantia';
   return FIELD_LABELS[key] || key.replaceAll('_', ' ');
 }
 
@@ -132,8 +138,8 @@ function columnNameFromError(error) {
 async function insertCatalogRow(table, payload) {
   const optional = table === 'fornecedores'
     ? ['razao_social', 'nome_fantasia', 'telefone1', 'telefone2', 'localizacao', 'contato', 'logo_path']
-    : table === 'garantias'
-      ? ['telefone', 'prazo_valor', 'prazo_unidade', 'data_fim', 'motivos_perda_garantia']
+    : table === 'garantias' || table === 'materiais'
+      ? ['telefone', 'prazo_valor', 'prazo_unidade', 'data_fim', 'motivos_perda_garantia', 'descricao']
       : table === 'locais'
         ? ['area']
         : [];
@@ -189,7 +195,12 @@ function catalogTags(table, row) {
   if (table === 'fornecedores') return fornecedorTags(row);
   if (table === 'materiais') {
     const forn = relatedNome(row.fornecedores);
-    return forn ? [{ key: 'forn', icon: 'box', label: forn }] : [];
+    const prazo = formatPrazo(row.prazo_valor, row.prazo_unidade);
+    return [
+      forn ? { key: 'forn', icon: 'box', label: forn } : null,
+      prazo ? { key: 'prazo', icon: 'shield', label: prazo } : null,
+      row.data_fim ? { key: 'fim', icon: 'calendar', label: `até ${formatDate(row.data_fim)}` } : null,
+    ].filter(Boolean);
   }
   if (table === 'locais') {
     const desc = String(row.descricao || '').trim();
@@ -293,7 +304,7 @@ async function loadRelatedGroups(table, id) {
   if (table === 'fornecedores') {
     const matsRes = await supabase
       .from('materiais')
-      .select('id, nome')
+      .select('id, nome, prazo_valor, prazo_unidade, data_fim')
       .eq('fornecedor_id', id)
       .order('nome');
     const mats = matsRes.data || [];
@@ -301,93 +312,22 @@ async function loadRelatedGroups(table, id) {
     groups.push({
       key: 'produtos',
       label: 'Produtos',
-      items: mats.map((row) => ({
-        id: row.id,
-        nome: row.nome,
-        to: `/materiais/${row.id}`,
-      })),
-    });
-
-    const matIds = mats.map((m) => m.id);
-    const linksByMat = new Map();
-    if (matIds.length) {
-      const { data: allLinks } = await supabase
-        .from('material_garantias')
-        .select('material_id, garantia_id, garantias(id, nome, prazo_valor, prazo_unidade, data_fim)')
-        .in('material_id', matIds);
-      for (const row of allLinks || []) {
-        const list = linksByMat.get(row.material_id) || [];
-        list.push(row);
-        linksByMat.set(row.material_id, list);
-      }
-    }
-
-    const garantiaPorProduto = mats.map((mat) => {
-      const children = (linksByMat.get(mat.id) || [])
-        .map((row) => {
-          const g = Array.isArray(row.garantias) ? row.garantias[0] : row.garantias;
-          if (!g?.id) return null;
-          const prazo = formatPrazo(g.prazo_valor, g.prazo_unidade);
-          const fim = g.data_fim ? formatDate(g.data_fim) : '';
-          const sub = [prazo, fim ? `até ${fim}` : ''].filter(Boolean).join(' · ');
-          return {
-            id: g.id,
-            nome: g.nome || 'Garantia',
-            sub: sub || 'Prazo não informado',
-            to: `/garantias/${g.id}`,
-          };
-        })
-        .filter(Boolean);
-      return {
-        id: mat.id,
-        nome: mat.nome,
-        to: `/materiais/${mat.id}`,
-        children: children.length
-          ? children
-          : [{ id: `${mat.id}-none`, nome: 'Sem garantia vinculada', sub: '', to: null }],
-      };
-    });
-
-    if (garantiaPorProduto.length) {
-      groups.push({
-        key: 'garantias_por_produto',
-        label: 'Garantias por produto',
-        kind: 'nested',
-        items: garantiaPorProduto,
-      });
-    }
-
-    const { data: gars } = await supabase
-      .from('fornecedor_garantias')
-      .select('garantia_id, garantias(id, nome, prazo_valor, prazo_unidade, data_fim)')
-      .eq('fornecedor_id', id);
-    groups.push({
-      key: 'garantias',
-      label: 'Garantias do fornecedor',
-      items: (gars || [])
-        .map((row) => {
-          const g = Array.isArray(row.garantias) ? row.garantias[0] : row.garantias;
-          if (!g?.id) return null;
-          const prazo = formatPrazo(g.prazo_valor, g.prazo_unidade);
-          const fim = g.data_fim ? `até ${formatDate(g.data_fim)}` : '';
-          return {
-            id: g.id,
-            nome: g.nome,
-            sub: [prazo, fim].filter(Boolean).join(' · '),
-            to: `/garantias/${g.id}`,
-          };
-        })
-        .filter(Boolean),
+      items: mats.map((row) => {
+        const prazo = formatPrazo(row.prazo_valor, row.prazo_unidade);
+        const fim = row.data_fim ? `até ${formatDate(row.data_fim)}` : '';
+        return {
+          id: row.id,
+          nome: row.nome,
+          sub: [prazo, fim].filter(Boolean).join(' · '),
+          to: `/materiais/${row.id}`,
+        };
+      }),
     });
   }
 
   if (table === 'materiais') {
-    const [locs, gars, mat] = await Promise.all([
+    const [locs, mat] = await Promise.all([
       supabase.from('material_locais').select('local_id, locais(id, nome)').eq('material_id', id),
-      supabase
-        .from('material_garantias')
-        .select('garantia_id, garantias(id, nome, prazo_valor, prazo_unidade, data_fim)')
-        .eq('material_id', id),
       supabase.from('materiais').select('fornecedor_id, fornecedores:fornecedor_id(id, nome)').eq('id', id).maybeSingle(),
     ]);
     const forn = mat.data?.fornecedores;
@@ -407,24 +347,6 @@ async function loadRelatedGroups(table, id) {
           const l = Array.isArray(row.locais) ? row.locais[0] : row.locais;
           if (!l?.id) return null;
           return { id: l.id, nome: l.nome, to: `/locais/${l.id}`, icon: iconForLocal(l.nome) };
-        })
-        .filter(Boolean),
-    });
-    groups.push({
-      key: 'garantias',
-      label: 'Garantias',
-      items: (gars.data || [])
-        .map((row) => {
-          const g = Array.isArray(row.garantias) ? row.garantias[0] : row.garantias;
-          if (!g?.id) return null;
-          const prazo = formatPrazo(g.prazo_valor, g.prazo_unidade);
-          const fim = g.data_fim ? `até ${formatDate(g.data_fim)}` : '';
-          return {
-            id: g.id,
-            nome: g.nome,
-            sub: [prazo, fim].filter(Boolean).join(' · '),
-            to: `/garantias/${g.id}`,
-          };
         })
         .filter(Boolean),
     });
@@ -488,7 +410,7 @@ async function ensureJoin(table, row, conflict) {
   if (error && error.code !== '23505') throw error;
 }
 
-async function linkMaterialRelations({ materialId, fornecedorId, localIds = [], garantiaIds = [] }) {
+async function linkMaterialRelations({ materialId, fornecedorId, localIds = [] }) {
   if (!materialId) return;
   if (fornecedorId) {
     await supabase.from('materiais').update({ fornecedor_id: fornecedorId }).eq('id', materialId);
@@ -500,21 +422,6 @@ async function linkMaterialRelations({ materialId, fornecedorId, localIds = [], 
       { material_id: materialId, local_id: localId },
       'material_id,local_id',
     );
-  }
-  for (const garantiaId of garantiaIds) {
-    if (!garantiaId) continue;
-    await ensureJoin(
-      'material_garantias',
-      { material_id: materialId, garantia_id: garantiaId },
-      'material_id,garantia_id',
-    );
-    if (fornecedorId) {
-      await ensureJoin(
-        'fornecedor_garantias',
-        { fornecedor_id: fornecedorId, garantia_id: garantiaId },
-        'fornecedor_id,garantia_id',
-      );
-    }
   }
 }
 
@@ -798,7 +705,6 @@ export function CatalogList({ table }) {
     fornecedores: [],
     materiais: [],
     locais: [],
-    garantias: [],
   });
   const [q, setQ] = useState('');
   const [form, setForm] = useState({});
@@ -807,7 +713,6 @@ export function CatalogList({ table }) {
     fornecedorId: '',
     materialIds: [],
     localIds: [],
-    garantiaIds: [],
   });
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -828,17 +733,15 @@ export function CatalogList({ table }) {
   }
 
   async function loadOptions() {
-    const [f, m, l, g] = await Promise.all([
+    const [f, m, l] = await Promise.all([
       supabase.from('fornecedores').select('id, nome').eq('condominio_id', condoId).order('nome'),
       supabase.from('materiais').select('id, nome').eq('condominio_id', condoId).order('nome'),
       supabase.from('locais').select('id, nome').eq('condominio_id', condoId).order('nome'),
-      supabase.from('garantias').select('id, nome').eq('condominio_id', condoId).order('nome'),
     ]);
     setOptions({
       fornecedores: f.data || [],
       materiais: m.data || [],
       locais: l.data || [],
-      garantias: g.data || [],
     });
   }
 
@@ -869,8 +772,10 @@ export function CatalogList({ table }) {
     try {
       const payload = { condominio_id: condoId };
       for (const col of cfg.fields) {
-        if (col === 'prazo_unidade' && table === 'garantias') {
-          payload.prazo_unidade = String(form.prazo_unidade || 'anos').trim().slice(0, 32);
+        if (col === 'prazo_unidade' && (table === 'garantias' || table === 'materiais')) {
+          if (form.prazo_valor != null && form.prazo_valor !== '') {
+            payload.prazo_unidade = String(form.prazo_unidade || 'anos').trim().slice(0, 32);
+          }
           continue;
         }
         const raw = form[col];
@@ -899,10 +804,10 @@ export function CatalogList({ table }) {
           if (payload[key]) payload[key] = formatTelefone(payload[key]);
         }
       }
-      if (table === 'garantias' && payload.prazo_valor != null && payload.prazo_valor !== '') {
+      if ((table === 'garantias' || table === 'materiais') && payload.prazo_valor != null && payload.prazo_valor !== '') {
         payload.prazo_valor = Number(payload.prazo_valor);
       }
-      if (table === 'garantias' && payload.telefone) {
+      if ((table === 'garantias' || table === 'materiais') && payload.telefone) {
         payload.telefone = formatTelefone(payload.telefone);
       }
 
@@ -914,25 +819,7 @@ export function CatalogList({ table }) {
           materialId: newId,
           fornecedorId: links.fornecedorId || null,
           localIds: links.localIds,
-          garantiaIds: links.garantiaIds,
         });
-      }
-
-      if (table === 'garantias' && newId) {
-        for (const materialId of links.materialIds) {
-          await linkMaterialRelations({
-            materialId,
-            fornecedorId: links.fornecedorId || null,
-            garantiaIds: [newId],
-          });
-        }
-        if (links.fornecedorId && !links.materialIds.length) {
-          await ensureJoin(
-            'fornecedor_garantias',
-            { fornecedor_id: links.fornecedorId, garantia_id: newId },
-            'fornecedor_id,garantia_id',
-          );
-        }
       }
 
       if (table === 'locais' && newId) {
@@ -947,20 +834,6 @@ export function CatalogList({ table }) {
       if (table === 'fornecedores' && newId) {
         for (const materialId of links.materialIds) {
           await supabase.from('materiais').update({ fornecedor_id: newId }).eq('id', materialId);
-          for (const garantiaId of links.garantiaIds) {
-            await ensureJoin(
-              'material_garantias',
-              { material_id: materialId, garantia_id: garantiaId },
-              'material_id,garantia_id',
-            );
-          }
-        }
-        for (const garantiaId of links.garantiaIds) {
-          await ensureJoin(
-            'fornecedor_garantias',
-            { fornecedor_id: newId, garantia_id: garantiaId },
-            'fornecedor_id,garantia_id',
-          );
         }
         if (logoFile) {
           await salvarLogoFornecedor({
@@ -974,7 +847,7 @@ export function CatalogList({ table }) {
 
       setForm({});
       setLogoFile(null);
-      setLinks({ fornecedorId: '', materialIds: [], localIds: [], garantiaIds: [] });
+      setLinks({ fornecedorId: '', materialIds: [], localIds: [] });
       await Promise.all([load(), loadOptions()]);
     } catch (err) {
       setError(err.message || 'Não foi possível salvar.');
@@ -1064,6 +937,42 @@ export function CatalogList({ table }) {
               </div>
               <FormField table={table} col="localizacao" form={form} setForm={setForm} />
             </>
+          ) : table === 'materiais' ? (
+            <>
+              <FormField table={table} col="nome" form={form} setForm={setForm} />
+              <Field label="Fornecedor">
+                <select
+                  value={links.fornecedorId}
+                  onChange={(e) => setLinks({ ...links, fornecedorId: e.target.value })}
+                >
+                  <option value="">Sem fornecedor</option>
+                  {options.fornecedores.map((opt) => (
+                    <option key={opt.id} value={opt.id}>{opt.nome}</option>
+                  ))}
+                </select>
+              </Field>
+              <MultiCheck
+                label="Locais"
+                options={options.locais}
+                values={links.localIds}
+                onChange={(localIds) => setLinks({ ...links, localIds })}
+                withLocalIcons
+              />
+              <div className="catalog-form-section">
+                <h3>Garantia do produto</h3>
+                <p className="hint" style={{ marginTop: 0 }}>
+                  A garantia fica vinculada a este produto. Não é um cadastro separado.
+                </p>
+                <div className="catalog-form-grid">
+                  <FormField table={table} col="prazo_valor" form={form} setForm={setForm} />
+                  <FormField table={table} col="prazo_unidade" form={form} setForm={setForm} />
+                </div>
+                <FormField table={table} col="data_fim" form={form} setForm={setForm} />
+                <FormField table={table} col="motivos_perda_garantia" form={form} setForm={setForm} />
+                <FormField table={table} col="descricao" form={form} setForm={setForm} />
+                <FormField table={table} col="telefone" form={form} setForm={setForm} />
+              </div>
+            </>
           ) : (
             cfg.fields.map((col) => (
               <FormField key={col} table={table} col={col} form={form} setForm={setForm} />
@@ -1084,57 +993,6 @@ export function CatalogList({ table }) {
             </div>
           ) : null}
 
-          {table === 'materiais' ? (
-            <>
-              <Field label="Fornecedor">
-                <select
-                  value={links.fornecedorId}
-                  onChange={(e) => setLinks({ ...links, fornecedorId: e.target.value })}
-                >
-                  <option value="">Sem fornecedor</option>
-                  {options.fornecedores.map((opt) => (
-                    <option key={opt.id} value={opt.id}>{opt.nome}</option>
-                  ))}
-                </select>
-              </Field>
-              <MultiCheck
-                label="Garantias"
-                options={options.garantias}
-                values={links.garantiaIds}
-                onChange={(garantiaIds) => setLinks({ ...links, garantiaIds })}
-              />
-              <MultiCheck
-                label="Locais"
-                options={options.locais}
-                values={links.localIds}
-                onChange={(localIds) => setLinks({ ...links, localIds })}
-                withLocalIcons
-              />
-            </>
-          ) : null}
-
-          {table === 'garantias' ? (
-            <>
-              <Field label="Fornecedor">
-                <select
-                  value={links.fornecedorId}
-                  onChange={(e) => setLinks({ ...links, fornecedorId: e.target.value })}
-                >
-                  <option value="">Sem fornecedor</option>
-                  {options.fornecedores.map((opt) => (
-                    <option key={opt.id} value={opt.id}>{opt.nome}</option>
-                  ))}
-                </select>
-              </Field>
-              <MultiCheck
-                label="Materiais cobertos"
-                options={options.materiais}
-                values={links.materialIds}
-                onChange={(materialIds) => setLinks({ ...links, materialIds })}
-              />
-            </>
-          ) : null}
-
           {table === 'locais' ? (
             <MultiCheck
               label="Produtos utilizados no local"
@@ -1145,20 +1003,12 @@ export function CatalogList({ table }) {
           ) : null}
 
           {table === 'fornecedores' ? (
-            <>
-              <MultiCheck
-                label="Produtos deste fornecedor"
-                options={options.materiais}
-                values={links.materialIds}
-                onChange={(materialIds) => setLinks({ ...links, materialIds })}
-              />
-              <MultiCheck
-                label="Garantias (aplicadas aos produtos selecionados)"
-                options={options.garantias}
-                values={links.garantiaIds}
-                onChange={(garantiaIds) => setLinks({ ...links, garantiaIds })}
-              />
-            </>
+            <MultiCheck
+              label="Produtos deste fornecedor"
+              options={options.materiais}
+              values={links.materialIds}
+              onChange={(materialIds) => setLinks({ ...links, materialIds })}
+            />
           ) : null}
 
           <Btn type="submit" icon="check" disabled={saving}>{saving ? 'Salvando…' : 'Salvar'}</Btn>

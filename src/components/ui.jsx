@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { formatCnpj, formatTelefone } from '../lib/format';
+import { STATUS_LABEL } from '../lib/permissions';
 import { Icon } from './icons';
 import ccaLogo from '../assets/logo cca collor (1).png';
 
@@ -110,7 +111,9 @@ export function Empty({ text }) {
 }
 
 export function Badge({ value }) {
-  return <span className={`badge ${value || ''}`}>{String(value || '').replaceAll('_', ' ')}</span>;
+  const key = String(value || '');
+  const label = STATUS_LABEL[key] || key.replaceAll('_', ' ');
+  return <span className={`badge ${key}`}>{label}</span>;
 }
 
 export function ChamadoAdminTag({ compact = false }) {

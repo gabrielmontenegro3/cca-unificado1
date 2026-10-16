@@ -23,7 +23,7 @@ export function DashboardPage() {
         supabase.from('unidades').select('id', { count: 'exact', head: true }).eq('condominio_id', condoId),
         supabase.from('fornecedores').select('id', { count: 'exact', head: true }).eq('condominio_id', condoId),
         supabase.from('materiais').select('id', { count: 'exact', head: true }).eq('condominio_id', condoId),
-        supabase.from('garantias').select('id', { count: 'exact', head: true }).eq('condominio_id', condoId),
+        supabase.from('materiais').select('id', { count: 'exact', head: true }).eq('condominio_id', condoId).not('prazo_valor', 'is', null),
         supabase.from('chamados').select('id, numero_registro, titulo, status, updated_at').eq('condominio_id', condoId).order('updated_at', { ascending: false }).limit(8),
         supabase.from('manutencoes_preventivas').select('*').eq('condominio_id', condoId).eq('ativo', true).order('proxima_execucao', { ascending: true }).limit(6),
       ]);

@@ -348,6 +348,7 @@ function ChamadosInbox() {
                   solicitanteId={chamado.solicitante_id}
                   solicitanteNome={nomePessoa(chamado.usuarios)}
                   origemAdmin={daAdmin}
+                  aguardandoConstrutora={chamado.status === 'laudo_direcionado'}
                   empty="Nenhuma mensagem ainda."
                 />
               </div>
@@ -845,6 +846,7 @@ function ChamadoDetalheSimples() {
               solicitanteId={chamado.solicitante_id}
               solicitanteNome={nomePessoa(chamado.usuarios)}
               origemAdmin={daAdmin}
+              aguardandoConstrutora={chamado.status === 'laudo_direcionado'}
             />
           </div>
           <ChatComposer

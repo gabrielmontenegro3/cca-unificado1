@@ -19,6 +19,7 @@ import {
 import { formatCnpj } from '../lib/format';
 import { loginUrlDoCondominio, dominioUrlDoCondominio, loadBranding, nomeExibicaoConstrutora } from '../lib/branding';
 import { Modal } from '../components/DataList';
+import { ImportarCatalogoArquivo } from '../components/ImportarCatalogoArquivo';
 import { UnreadOrb } from '../components/UnreadOrb';
 import { condominiosComNaoLidas } from '../lib/notifications';
 import { UsuariosGestaoModal } from './Admin';
@@ -44,7 +45,6 @@ const EMPTY_FORM = {
   fornecedores_texto: '',
   materiais_texto: '',
   locais_texto: '',
-  garantias_texto: '',
   unidades_texto: '',
   unidade_config: { ...EMPTY_UNIDADE_CONFIG },
   contatos_texto: '',
@@ -676,8 +676,8 @@ export function CondominiosPortal() {
             </Section>
 
             <Section
-              title="Fornecedores · Materiais · Locais · Garantias"
-              hint="Copie o padrão, troque os [colchetes] pelos dados reais e cole de volta no campo. Uma linha = um registro."
+              title="Fornecedores · Materiais · Locais"
+              hint="Pode digitar/colar o texto nos campos (como antes) e/ou importar de arquivo. Os dois caminhos alimentam as mesmas listagens."
             >
               <div className="row">
                 <Btn
@@ -694,8 +694,9 @@ export function CondominiosPortal() {
               </div>
               <Field label="Base técnica (vínculos)">
                 <p className="hint" style={{ marginTop: 0 }}>
-                  Cada linha conecta Fornecedor · Material · Local · Garantia.
-                  Ex.: <code>Acme | Porcelanato | Hall | Garantia fábrica</code>
+                  Cada linha conecta Fornecedor · Material · Local.
+                  Ex.: <code>Acme | Porcelanato | Hall</code>
+                  A garantia fica no cadastro do material, não aqui.
                 </p>
                 <PadraoBar
                   padrao={PADROES.catalogo}
@@ -727,9 +728,10 @@ export function CondominiosPortal() {
                   onPick={setFornecedorLogo}
                 />
               </Field>
-              <Field label="Materiais">
+              <Field label="Materiais (com garantia)">
                 <p className="hint" style={{ marginTop: 0 }}>
-                  Um material por linha (nome). Vínculos com fornecedor/local/garantia vêm da base técnica.
+                  Nome · tempo · unidade (dias/meses/anos) · data final · perda da garantia · descrição · telefone.
+                  A garantia fica atrelada ao produto nesta mesma linha.
                 </p>
                 <PadraoBar
                   padrao={PADROES.materiais}
@@ -751,18 +753,12 @@ export function CondominiosPortal() {
                 />
                 <textarea className="tall" placeholder={PADROES.locais} value={form.locais_texto} onChange={(e) => setField('locais_texto', e.target.value)} />
               </Field>
-              <Field label="Garantias">
-                <p className="hint" style={{ marginTop: 0 }}>
-                  Nome · tempo · unidade (dias/meses/anos) · data final · perda da garantia · descrição · telefone
-                </p>
-                <PadraoBar
-                  padrao={PADROES.garantias}
-                  value={form.garantias_texto}
-                  onUse={(next) => setField('garantias_texto', next)}
-                  onCopied={(msg) => { setOk(msg); setError(''); }}
-                />
-                <textarea className="tall" placeholder={PADROES.garantias} value={form.garantias_texto} onChange={(e) => setField('garantias_texto', e.target.value)} />
-              </Field>
+
+              <ImportarCatalogoArquivo
+                values={form}
+                onApply={(patch) => setForm((prev) => ({ ...prev, ...patch }))}
+                onMessage={(msg) => { setOk(msg); setError(''); }}
+              />
             </Section>
 
             <Section
@@ -827,8 +823,8 @@ export function CondominiosPortal() {
               {confirmResumo.cidade ? <li><strong>Cidade:</strong> {confirmResumo.cidade}</li> : null}
               <li><strong>Fornecedores:</strong> {confirmResumo.fornecedores}</li>
               <li><strong>Materiais:</strong> {confirmResumo.materiais}</li>
+              <li><strong>Com garantia no produto:</strong> {confirmResumo.garantias}</li>
               <li><strong>Locais:</strong> {confirmResumo.locais}</li>
-              <li><strong>Garantias:</strong> {confirmResumo.garantias}</li>
               <li><strong>Unidades:</strong> {confirmResumo.unidades}</li>
               <li><strong>Contatos:</strong> {confirmResumo.contatos}</li>
               <li><strong>Usuários a vincular:</strong> {confirmResumo.usuarios}</li>

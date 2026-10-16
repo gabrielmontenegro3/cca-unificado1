@@ -497,6 +497,7 @@ export function SuportePage() {
                     solicitanteId={chamado.solicitante_id}
                     solicitanteNome={nomePessoa(chamado.usuarios)}
                     origemAdmin={ehChamadoAdministracao(chamado)}
+                    aguardandoConstrutora={chamado.status === 'laudo_direcionado'}
                     empty="Nenhuma mensagem ainda."
                   />
                 </div>

@@ -278,7 +278,23 @@ export function ChatMensagem({
   );
 }
 
-export function ChatEvento({ item }) {
+export function LaudoEsperaConstrutora({ quando, girando = true }) {
+  return (
+    <div className="chat-event chat-event--laudo" role="status">
+      <span className="chat-event-icon" aria-hidden="true">
+        <Icon name="clipboard" size={18} />
+        {girando ? <span className="chat-event-spin" /> : null}
+      </span>
+      <div className="chat-event-copy">
+        <strong>Laudo direcionado</strong>
+        <span>Aguardando resposta da construtora</span>
+      </div>
+      {quando ? <time>{quando}</time> : null}
+    </div>
+  );
+}
+
+export function ChatEvento({ item, girando = false }) {
   if (item?.kind === 'visita') {
     const visita = item.visita;
     const hora = horarioDoEvento(visita);
@@ -301,6 +317,9 @@ export function ChatEvento({ item }) {
   }
 
   if (item?.kind === 'status') {
+    if (item.para === 'laudo_direcionado') {
+      return <LaudoEsperaConstrutora quando={formatChatTime(item.at)} girando={girando} />;
+    }
     const de = STATUS_LABEL[item.de] || item.de;
     const para = STATUS_LABEL[item.para] || item.para;
     const statusKey = String(item.para || item.de || '').toLowerCase();
@@ -338,17 +357,29 @@ export function ChatLog({
   origemAdmin = false,
   comFoto = false,
   equipeADireita = false,
+  aguardandoConstrutora = false,
   empty = 'Envie a primeira mensagem.',
 }) {
   const items = useMemo(
     () => montarLinhaDoTempoChat({ mensagens, historico, visitas }),
     [mensagens, historico, visitas],
   );
-  if (!items.length) return <Empty text={empty} />;
+  if (!items.length) {
+    return aguardandoConstrutora ? <LaudoEsperaConstrutora /> : <Empty text={empty} />;
+  }
+  const temLaudoNoFluxo = items.some((item) => item.kind === 'status' && item.para === 'laudo_direcionado');
   return (
     <>
       {items.map((item) => {
-        if (item.kind !== 'msg') return <ChatEvento key={item.id} item={item} />;
+        if (item.kind !== 'msg') {
+          return (
+            <ChatEvento
+              key={item.id}
+              item={item}
+              girando={aguardandoConstrutora && item.para === 'laudo_direcionado'}
+            />
+          );
+        }
         const m = item.mensagem;
         const ehSolicitante = Boolean(solicitanteId && m.usuario_id === solicitanteId);
         const mine = equipeADireita
@@ -366,9 +397,10 @@ export function ChatLog({
             origemAdmin={origemAdmin}
             comFoto={comFoto}
             mostrarNome={equipeADireita}
-          />
-        );
+        />
+      );
       })}
+      {aguardandoConstrutora && !temLaudoNoFluxo ? <LaudoEsperaConstrutora /> : null}
     </>
   );
 }

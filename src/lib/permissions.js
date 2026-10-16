@@ -4,6 +4,7 @@ export const STATUS_CHAMADO = [
   'aguardando_morador',
   'aguardando_fornecedor',
   'em_execucao',
+  'laudo_direcionado',
   'resolvido',
   'encerrado',
   'cancelado',
@@ -15,6 +16,7 @@ export const STATUS_LABEL = {
   aguardando_morador: 'Aguardando morador',
   aguardando_fornecedor: 'Aguardando fornecedor',
   em_execucao: 'Em execução',
+  laudo_direcionado: 'Laudo direcionado',
   resolvido: 'Resolvido',
   encerrado: 'Encerrado',
   cancelado: 'Cancelado',
@@ -23,6 +25,7 @@ export const STATUS_LABEL = {
 export const STATUS_UI = [
   { id: 'aberto', label: 'Aberto', match: ['aberto'] },
   { id: 'em_execucao', label: 'Em andamento', match: ['em_analise', 'aguardando_morador', 'aguardando_fornecedor', 'em_execucao'] },
+  { id: 'laudo_direcionado', label: 'Laudo direcionado', match: ['laudo_direcionado'] },
   { id: 'resolvido', label: 'Concluído', match: ['resolvido'] },
   { id: 'encerrado', label: 'Encerrado', match: ['encerrado', 'cancelado'] },
 ];
@@ -225,7 +228,6 @@ export function navGroupsFor(tipo) {
       items: [
         { to: '/fornecedores', label: 'Fornecedores', icon: 'box' },
         { to: '/materiais', label: 'Materiais', icon: 'layers' },
-        { to: '/garantias', label: 'Garantias', icon: 'shield' },
         { to: '/locais', label: 'Locais', icon: 'map' },
       ],
     },

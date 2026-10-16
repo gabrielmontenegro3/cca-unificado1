@@ -52,7 +52,7 @@ function atalhosPara(cargoTipo) {
     { to: '/documentos', icon: 'folder', label: 'Documentos', hint: 'Arquivos do empreendimento' },
     { to: '/boletins', icon: 'newspaper', label: 'Boletins', hint: 'Comunicados' },
     { to: '/contatos', icon: 'phone', label: 'Contatos', hint: 'Telefones úteis' },
-    { to: '/garantias', icon: 'shield', label: 'Garantias', hint: 'Prazos e cobertura' },
+    { to: '/materiais', icon: 'shield', label: 'Garantias', hint: 'Prazos no produto' },
   ];
 }
 
@@ -77,7 +77,7 @@ function ehAtualizacao(row, leitura, notifIds) {
 
 function chamadoEstaAberto(row) {
   const ui = statusUi(row?.status);
-  return ui.id === 'aberto' || ui.id === 'em_execucao';
+  return ui.id === 'aberto' || ui.id === 'em_execucao' || ui.id === 'laudo_direcionado';
 }
 
 function chamadoDaVez(lista) {
@@ -320,7 +320,7 @@ export function VisaoGeralPainel() {
       for (const row of dadosDe(statsRes)) {
         const ui = statusUi(row.status);
         if (ui.id === 'aberto') aberto += 1;
-        else if (ui.id === 'em_execucao') andamento += 1;
+        else if (ui.id === 'em_execucao' || ui.id === 'laudo_direcionado') andamento += 1;
         else if (ui.id === 'resolvido' || ui.id === 'encerrado') concluido += 1;
       }
 

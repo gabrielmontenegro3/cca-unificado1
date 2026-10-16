@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Modal } from './DataList';
 import { Alert, Btn, Empty } from './ui';
 import { Icon } from './icons';
@@ -94,41 +94,157 @@ export function EspecificidadeBotao({ chamado, onClick }) {
   );
 }
 
-export function GraficoBarras({ titulo, opcoes, contagem, animar = true }) {
-  const itens = opcoes
-    .map((op) => ({ ...op, n: contagem?.[op.id] || 0 }))
-    .sort((a, b) => b.n - a.n);
-  const max = Math.max(1, ...itens.map((item) => item.n));
-  const soma = itens.reduce((acc, item) => acc + item.n, 0);
-  const [pronto, setPronto] = useState(!animar);
+const CORES_PIZZA = [
+  { topo: '#2f7a64', lado: '#184838', brilho: '#8fd0b8' },
+  { topo: '#d08a32', lado: '#8a5414', brilho: '#f3cf96' },
+  { topo: '#3d6ea5', lado: '#1e3f66', brilho: '#a9c8ea' },
+  { topo: '#b55262', lado: '#6c2c38', brilho: '#efb3bd' },
+  { topo: '#6a5a9a', lado: '#3a3058', brilho: '#cbbfe6' },
+  { topo: '#c46b3a', lado: '#7a3a16', brilho: '#f3c0a0' },
+  { topo: '#3f8b86', lado: '#1d524e', brilho: '#9ed9d4' },
+  { topo: '#8a6a3b', lado: '#523c1c', brilho: '#e2c48a' },
+];
 
-  useEffect(() => {
-    if (!animar) return undefined;
-    setPronto(false);
-    const id = requestAnimationFrame(() => setPronto(true));
-    return () => cancelAnimationFrame(id);
-  }, [animar, contagem]);
+const PIZZA = { cx: 118, cy: 62, rx: 86, ry: 40, profundidade: 18 };
+
+function pontoPizza(cx, cy, rx, ry, graus) {
+  const rad = (graus * Math.PI) / 180;
+  return [cx + rx * Math.cos(rad), cy + ry * Math.sin(rad)];
+}
+
+function caminhoTopo(cx, cy, rx, ry, a0, a1) {
+  if (a1 - a0 >= 359.9) {
+    return `M ${cx - rx} ${cy} A ${rx} ${ry} 0 1 1 ${cx + rx} ${cy} A ${rx} ${ry} 0 1 1 ${cx - rx} ${cy} Z`;
+  }
+  const [x0, y0] = pontoPizza(cx, cy, rx, ry, a0);
+  const [x1, y1] = pontoPizza(cx, cy, rx, ry, a1);
+  const grande = a1 - a0 > 180 ? 1 : 0;
+  return `M ${cx} ${cy} L ${x0} ${y0} A ${rx} ${ry} 0 ${grande} 1 ${x1} ${y1} Z`;
+}
+
+function caminhoLado(cx, cy, rx, ry, profundidade, a0, a1) {
+  const passos = Math.max(2, Math.ceil((a1 - a0) / 5));
+  const trechos = [];
+  let atual = [];
+  for (let i = 0; i <= passos; i += 1) {
+    const angulo = a0 + ((a1 - a0) * i) / passos;
+    const rad = (angulo * Math.PI) / 180;
+    if (Math.sin(rad) > 0.05) atual.push(pontoPizza(cx, cy, rx, ry, angulo));
+    else if (atual.length) {
+      trechos.push(atual);
+      atual = [];
+    }
+  }
+  if (atual.length) trechos.push(atual);
+  return trechos
+    .filter((pts) => pts.length >= 2)
+    .map((pts) => {
+      const topo = pts.map(([x, y]) => `${x.toFixed(2)} ${y.toFixed(2)}`).join(' L ');
+      const base = [...pts].reverse().map(([x, y]) => `${x.toFixed(2)} ${(y + profundidade).toFixed(2)}`).join(' L ');
+      return `M ${topo} L ${base} Z`;
+    })
+    .join(' ');
+}
+
+export function GraficoPizza({ titulo, opcoes, contagem, animar = true }) {
+  const uid = useId().replace(/:/g, '');
+  const [ativa, setAtiva] = useState('');
+  const itens = opcoes.map((op, index) => ({
+    ...op,
+    n: contagem?.[op.id] || 0,
+    cor: CORES_PIZZA[index % CORES_PIZZA.length],
+  }));
+  const ordenados = [...itens].sort((a, b) => b.n - a.n || a.label.localeCompare(b.label, 'pt-BR'));
+  const fatias = ordenados.filter((item) => item.n > 0);
+  const soma = fatias.reduce((acc, item) => acc + item.n, 0);
+  const { cx, cy, rx, ry, profundidade } = PIZZA;
+
+  let angulo = -90;
+  const desenhos = fatias.map((item) => {
+    const inicio = angulo;
+    const fim = angulo + (item.n / soma) * 360;
+    angulo = fim;
+    return {
+      ...item,
+      inicio,
+      fim,
+      pct: Math.round((item.n / soma) * 100),
+      lado: caminhoLado(cx, cy, rx, ry, profundidade, inicio, fim),
+      topo: caminhoTopo(cx, cy, rx, ry, inicio, fim),
+    };
+  });
+  const lados = [...desenhos].sort((a, b) => {
+    const meioA = Math.sin((((a.inicio + a.fim) / 2) * Math.PI) / 180);
+    const meioB = Math.sin((((b.inicio + b.fim) / 2) * Math.PI) / 180);
+    return meioA - meioB;
+  });
 
   return (
-    <section className="grafico">
+    <section className={`grafico grafico--pizza${animar ? ' is-animado' : ''}`}>
       <header className="grafico-head">
         <h4>{titulo}</h4>
         <span>{soma} classificado(s)</span>
       </header>
-      <ul className="grafico-barras">
-        {itens.map((item) => (
-          <li key={item.id} className={item.n ? '' : 'is-zero'}>
-            <span className="grafico-label">{item.label}</span>
-            <span className="grafico-trilho">
-              <span
-                className="grafico-barra"
-                style={{ width: pronto ? `${(item.n / max) * 100}%` : '0%' }}
+      {soma ? (
+        <div className="pizza-corpo">
+          <svg className="pizza-svg" viewBox="0 0 236 148" role="img" aria-label={titulo}>
+            <ellipse className="pizza-sombra" cx={cx} cy={cy + profundidade + 8} rx={rx * 0.92} ry={ry * 0.55} />
+            <defs>
+              <clipPath id={`pizza-disco-${uid}`}>
+                <ellipse cx={cx} cy={cy} rx={rx - 1} ry={ry - 1} />
+              </clipPath>
+              {desenhos.map((item) => (
+                <linearGradient key={item.id} id={`pizza-${uid}-${item.id}`} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={item.cor.brilho} />
+                  <stop offset="46%" stopColor={item.cor.topo} />
+                  <stop offset="100%" stopColor={item.cor.lado} />
+                </linearGradient>
+              ))}
+            </defs>
+            {lados.map((item) => (item.lado ? (
+              <path
+                key={`${item.id}-lado`}
+                className={`pizza-lado${ativa === item.id ? ' is-ativa' : ''}${ativa && ativa !== item.id ? ' is-apagada' : ''}`}
+                d={item.lado}
+                fill={item.cor.lado}
               />
-            </span>
-            <span className="grafico-valor">{item.n}</span>
-          </li>
-        ))}
-      </ul>
+            ) : null))}
+            {desenhos.map((item) => (
+              <path
+                key={`${item.id}-topo`}
+                className={`pizza-topo${ativa === item.id ? ' is-ativa' : ''}${ativa && ativa !== item.id ? ' is-apagada' : ''}`}
+                d={item.topo}
+                fill={`url(#pizza-${uid}-${item.id})`}
+                transform={ativa === item.id ? 'translate(0 -5)' : undefined}
+                onMouseEnter={() => setAtiva(item.id)}
+                onMouseLeave={() => setAtiva('')}
+              >
+                <title>{`${item.label}: ${item.n} (${item.pct}%)`}</title>
+              </path>
+            ))}
+            <ellipse className="pizza-brilho" clipPath={`url(#pizza-disco-${uid})`} cx={cx - 8} cy={cy - 10} rx={rx * 0.55} ry={ry * 0.34} />
+          </svg>
+          <ul className="pizza-legenda">
+            {ordenados.map((item) => {
+              const pct = soma ? Math.round((item.n / soma) * 100) : 0;
+              return (
+                <li
+                  key={item.id}
+                  className={`${item.n ? '' : 'is-zero'}${ativa === item.id ? ' is-ativa' : ''}`}
+                  onMouseEnter={() => item.n && setAtiva(item.id)}
+                  onMouseLeave={() => setAtiva('')}
+                >
+                  <i style={{ background: item.cor.topo }} />
+                  <span>{item.label}</span>
+                  <strong>{item.n ? `${item.n} · ${pct}%` : '0'}</strong>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ) : (
+        <p className="pizza-vazio">Nenhum chamado classificado neste grupo.</p>
+      )}
     </section>
   );
 }
@@ -140,7 +256,7 @@ export function GraficosEspecificidade({ resumo, animar = true }) {
   return (
     <div className="graficos-grid">
       {CAMPOS_ESPECIFICIDADE.map(({ campo, titulo, opcoes }) => (
-        <GraficoBarras key={campo} titulo={titulo} opcoes={opcoes} contagem={resumo[campo]} animar={animar} />
+        <GraficoPizza key={campo} titulo={titulo} opcoes={opcoes} contagem={resumo[campo]} animar={animar} />
       ))}
     </div>
   );

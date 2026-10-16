@@ -263,18 +263,7 @@ async function popularCondominioCliente(condoId, seed, userId, fornecedorLogos) 
       telefone2: formatTelefone(row.telefone2) || null,
       localizacao: row.localizacao || null,
     })), ['telefone1', 'telefone2', 'localizacao', 'contato', 'logo_path', 'razao_social', 'nome_fantasia']),
-    insertRows('materiais', seed.materiais.map((row) => ({
-      condominio_id: condoId,
-      nome: row.nome,
-    }))),
-    insertRows('locais', seed.locais.map((row) => ({
-      condominio_id: condoId,
-      nome: row.nome,
-      tipo: tipoForLocal(row.nome, row.descricao),
-      area: areaForLocal(row.nome, row.descricao, row.area),
-      descricao: row.descricao || null,
-    })), ['area']),
-    insertRows('garantias', seed.garantias.map((row) => {
+    insertRows('materiais', seed.materiais.map((row) => {
       const unidade = String(row.prazo_unidade || '').trim().toLowerCase();
       const prazoUnidade = ['dias', 'meses', 'anos'].includes(unidade) ? unidade : (unidade || null);
       const prazoValor = row.prazo_valor !== '' && row.prazo_valor != null
@@ -290,7 +279,14 @@ async function popularCondominioCliente(condoId, seed, userId, fornecedorLogos) 
         descricao: row.descricao || null,
         telefone: formatTelefone(row.telefone) || null,
       };
-    }), ['telefone', 'prazo_valor', 'prazo_unidade', 'data_fim', 'motivos_perda_garantia']),
+    }), ['telefone', 'prazo_valor', 'prazo_unidade', 'data_fim', 'motivos_perda_garantia', 'descricao']),
+    insertRows('locais', seed.locais.map((row) => ({
+      condominio_id: condoId,
+      nome: row.nome,
+      tipo: tipoForLocal(row.nome, row.descricao),
+      area: areaForLocal(row.nome, row.descricao, row.area),
+      descricao: row.descricao || null,
+    })), ['area']),
     insertRows('unidades', [
       ...((seed.unidades || []).some((row) => {
         const n = String(row.identificacao || '')
@@ -327,13 +323,12 @@ async function popularCondominioCliente(condoId, seed, userId, fornecedorLogos) 
       if (mat && forn && !fornByMat.has(mat)) fornByMat.set(mat, forn);
     }
 
-    const [fornMap, locMap, garMap] = await Promise.all([
+    const [fornMap, locMap] = await Promise.all([
       ensureNomes('fornecedores', condoId, linhas.map((linha) => linha.fornecedor)),
       ensureNomes('locais', condoId, linhas.map((linha) => linha.local), (name) => ({
         tipo: tipoForLocal(name),
         area: areaForLocal(name),
       }), ['area']),
-      ensureNomes('garantias', condoId, linhas.map((linha) => linha.garantia)),
     ]);
     const matMap = await ensureNomes(
       'materiais',
@@ -344,16 +339,10 @@ async function popularCondominioCliente(condoId, seed, userId, fornecedorLogos) 
     );
 
     const joinsML = [];
-    const joinsMG = [];
-    const joinsFG = [];
     const seenML = new Set();
-    const seenMG = new Set();
-    const seenFG = new Set();
     for (const linha of linhas) {
-      const fornecedorId = fornMap.get(nomeKey(linha.fornecedor));
       const materialId = matMap.get(nomeKey(linha.material));
       const localId = locMap.get(nomeKey(linha.local));
-      const garantiaId = garMap.get(nomeKey(linha.garantia));
       if (materialId && localId) {
         const key = `${materialId}:${localId}`;
         if (!seenML.has(key)) {
@@ -361,27 +350,9 @@ async function popularCondominioCliente(condoId, seed, userId, fornecedorLogos) 
           joinsML.push({ material_id: materialId, local_id: localId });
         }
       }
-      if (materialId && garantiaId) {
-        const key = `${materialId}:${garantiaId}`;
-        if (!seenMG.has(key)) {
-          seenMG.add(key);
-          joinsMG.push({ material_id: materialId, garantia_id: garantiaId });
-        }
-      }
-      if (fornecedorId && garantiaId) {
-        const key = `${fornecedorId}:${garantiaId}`;
-        if (!seenFG.has(key)) {
-          seenFG.add(key);
-          joinsFG.push({ fornecedor_id: fornecedorId, garantia_id: garantiaId });
-        }
-      }
     }
 
-    await Promise.all([
-      upsertJoinRows('material_locais', joinsML, 'material_id,local_id'),
-      upsertJoinRows('material_garantias', joinsMG, 'material_id,garantia_id'),
-      upsertJoinRows('fornecedor_garantias', joinsFG, 'fornecedor_id,garantia_id'),
-    ]).catch(() => { /* vínculo complementar */ });
+    await upsertJoinRows('material_locais', joinsML, 'material_id,local_id').catch(() => { /* vínculo complementar */ });
   }
 
   const usuarios = (seed.usuarios || []).filter((user) => user.email);
@@ -1305,7 +1276,7 @@ export async function criarLaudo({ condominioId, userId, chamadoId, titulo, desc
 
   const { data: chamado, error: chErr } = await supabase
     .from('chamados')
-    .select('id, condominio_id, titulo, numero_registro, unidades(identificacao, bloco, andar)')
+    .select('id, condominio_id, titulo, numero_registro, status, unidades(identificacao, bloco, andar)')
     .eq('id', chamadoId)
     .single();
   if (chErr) throw chErr;
@@ -1390,6 +1361,22 @@ export async function criarLaudo({ condominioId, userId, chamadoId, titulo, desc
         uploaded.map((arquivo) => ({ mensagem_id: msg.id, arquivo_id: arquivo.id })),
       );
       if (marqErr) throw marqErr;
+    }
+  }
+
+  if (chamado.status !== 'laudo_direcionado') {
+    const { error: stErr } = await supabase.from('chamados').update({
+      status: 'laudo_direcionado',
+    }).eq('id', chamadoId);
+    if (stErr && !/enum|laudo_direcionado/i.test(stErr.message || '')) throw stErr;
+    if (!stErr) {
+      const { error: histErr } = await supabase.from('chamado_status_historico').insert({
+        chamado_id: chamadoId,
+        status_anterior: chamado.status || null,
+        status_novo: 'laudo_direcionado',
+        alterado_por: userId,
+      });
+      if (histErr && !/enum|laudo_direcionado/i.test(histErr.message || '')) throw histErr;
     }
   }
 
