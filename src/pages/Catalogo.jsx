@@ -135,19 +135,22 @@ function columnNameFromError(error) {
   return match?.[1] || '';
 }
 
-async function insertCatalogRow(table, payload) {
+async function writeCatalogRow(table, payload, id) {
   const optional = table === 'fornecedores'
     ? ['razao_social', 'nome_fantasia', 'telefone1', 'telefone2', 'localizacao', 'contato', 'logo_path']
     : table === 'garantias' || table === 'materiais'
-      ? ['telefone', 'prazo_valor', 'prazo_unidade', 'data_fim', 'motivos_perda_garantia', 'descricao']
+      ? ['telefone', 'prazo_valor', 'prazo_unidade', 'data_fim', 'motivos_perda_garantia', 'descricao', 'fornecedor_id']
       : table === 'locais'
         ? ['area']
         : [];
   const body = { ...payload };
   let lastError = null;
   for (let attempt = 0; attempt < 8; attempt += 1) {
-    const { data, error } = await supabase.from(table).insert(body).select('id').maybeSingle();
-    if (!error || data?.id) return data;
+    const query = id
+      ? supabase.from(table).update(body).eq('id', id).select('id').maybeSingle()
+      : supabase.from(table).insert(body).select('id').maybeSingle();
+    const { data, error } = await query;
+    if (!error) return data || { id };
     lastError = error;
     if (!isMissingColumnError(error)) throw error;
     const col = columnNameFromError(error);
@@ -160,6 +163,193 @@ async function insertCatalogRow(table, payload) {
     delete body[next];
   }
   throw lastError || new Error('Não foi possível salvar.');
+}
+
+function blankValue(value) {
+  return value == null || String(value).trim() === '';
+}
+
+function asDateInput(value) {
+  const match = String(value || '').match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : '';
+}
+
+function formFromRow(table, row) {
+  const form = {};
+  for (const col of CONFIG[table].fields) {
+    const raw = row?.[col];
+    if (col === 'data_fim') form[col] = asDateInput(raw);
+    else if (col === 'prazo_valor') form[col] = raw == null || raw === '' ? '' : String(raw);
+    else if (col === 'prazo_unidade') form[col] = raw || 'anos';
+    else if (col === 'cnpj') form[col] = formatCnpj(raw) || '';
+    else if (String(col).startsWith('telefone')) form[col] = raw ? (formatTelefone(raw) || String(raw)) : '';
+    else form[col] = raw == null ? '' : String(raw);
+  }
+  return form;
+}
+
+function catalogPayload(table, form, links, { condoId, editing }) {
+  const payload = editing ? {} : { condominio_id: condoId };
+  for (const col of CONFIG[table].fields) {
+    if (col === 'prazo_unidade') continue;
+    const raw = form[col];
+    if (blankValue(raw)) {
+      if (editing) payload[col] = null;
+      continue;
+    }
+    payload[col] = typeof raw === 'string' ? raw.trim() : raw;
+  }
+
+  if (table === 'locais') {
+    if (blankValue(form.nome)) throw new Error('Informe o nome do local.');
+    if (!form.area) throw new Error('Informe se o local é área privativa ou área comum.');
+    payload.tipo = tipoForLocal(form.nome, form.descricao);
+    payload.area = areaForLocal(form.nome, form.descricao, form.area);
+  }
+
+  if (table === 'materiais' || table === 'garantias') {
+    if (blankValue(form.nome)) throw new Error('Informe o nome.');
+  }
+
+  if (table === 'materiais' && (editing || links.fornecedorId)) {
+    payload.fornecedor_id = links.fornecedorId || null;
+  }
+
+  if (table === 'fornecedores') {
+    const razao = String(form.razao_social || '').trim();
+    const fantasia = String(form.nome_fantasia || '').trim();
+    if (!razao) throw new Error('Informe a razão social.');
+    if (!fantasia) throw new Error('Informe o nome fantasia.');
+    payload.razao_social = razao;
+    payload.nome_fantasia = fantasia;
+    payload.nome = fantasia;
+    if ('cnpj' in payload || editing) payload.cnpj = normalizarCnpj(form.cnpj);
+    for (const key of ['telefone', 'telefone1', 'telefone2']) {
+      if (payload[key]) payload[key] = formatTelefone(payload[key]);
+    }
+  }
+
+  if (table === 'garantias' || table === 'materiais') {
+    if (!blankValue(form.prazo_valor)) {
+      const prazo = Number(form.prazo_valor);
+      if (Number.isNaN(prazo)) throw new Error('Informe um tempo de garantia válido.');
+      payload.prazo_valor = prazo;
+      payload.prazo_unidade = String(form.prazo_unidade || 'anos').trim().slice(0, 32);
+    } else if (editing) {
+      payload.prazo_valor = null;
+      payload.prazo_unidade = null;
+    }
+    if (payload.telefone) payload.telefone = formatTelefone(payload.telefone);
+  }
+
+  return payload;
+}
+
+async function linksDoRegistro(table, row) {
+  const vazio = { fornecedorId: '', materialIds: [], localIds: [] };
+  if (!row?.id) return vazio;
+  if (table === 'materiais') {
+    const { data, error } = await supabase.from('material_locais').select('local_id').eq('material_id', row.id);
+    if (error) throw error;
+    return {
+      fornecedorId: row.fornecedor_id || '',
+      materialIds: [],
+      localIds: (data || []).map((item) => item.local_id).filter(Boolean),
+    };
+  }
+  if (table === 'locais') {
+    const { data, error } = await supabase.from('material_locais').select('material_id').eq('local_id', row.id);
+    if (error) throw error;
+    return {
+      ...vazio,
+      materialIds: (data || []).map((item) => item.material_id).filter(Boolean),
+    };
+  }
+  if (table === 'fornecedores') {
+    const { data, error } = await supabase.from('materiais').select('id').eq('fornecedor_id', row.id);
+    if (error) throw error;
+    return {
+      ...vazio,
+      materialIds: (data || []).map((item) => item.id).filter(Boolean),
+    };
+  }
+  return vazio;
+}
+
+async function syncPairs(table, fixedCol, fixedId, otherCol, nextIds) {
+  const wanted = [...new Set((nextIds || []).filter(Boolean))];
+  const { data, error } = await supabase.from(table).select(otherCol).eq(fixedCol, fixedId);
+  if (error) throw error;
+  const current = (data || []).map((row) => row[otherCol]).filter(Boolean);
+  const remove = current.filter((itemId) => !wanted.includes(itemId));
+  const add = wanted.filter((itemId) => !current.includes(itemId));
+  if (remove.length) {
+    const del = await supabase.from(table).delete().eq(fixedCol, fixedId).in(otherCol, remove);
+    if (del.error) throw del.error;
+  }
+  for (const otherId of add) {
+    await ensureJoin(table, { [fixedCol]: fixedId, [otherCol]: otherId }, `${fixedCol},${otherCol}`);
+  }
+}
+
+async function syncFornecedorMateriais(fornecedorId, materialIds) {
+  const wanted = [...new Set((materialIds || []).filter(Boolean))];
+  const { data, error } = await supabase.from('materiais').select('id').eq('fornecedor_id', fornecedorId);
+  if (error) throw error;
+  const current = (data || []).map((row) => row.id);
+  const remove = current.filter((itemId) => !wanted.includes(itemId));
+  const add = wanted.filter((itemId) => !current.includes(itemId));
+  if (remove.length) {
+    const upd = await supabase.from('materiais').update({ fornecedor_id: null }).in('id', remove);
+    if (upd.error) throw upd.error;
+  }
+  if (add.length) {
+    const upd = await supabase.from('materiais').update({ fornecedor_id: fornecedorId }).in('id', add);
+    if (upd.error) throw upd.error;
+  }
+}
+
+async function applyCatalogLinks(table, id, links) {
+  if (!id) return;
+  if (table === 'materiais') {
+    await syncPairs('material_locais', 'material_id', id, 'local_id', links.localIds);
+  }
+  if (table === 'locais') {
+    await syncPairs('material_locais', 'local_id', id, 'material_id', links.materialIds);
+  }
+  if (table === 'fornecedores') {
+    await syncFornecedorMateriais(id, links.materialIds);
+  }
+}
+
+async function persistCatalogRecord({ table, id, form, links, logoFile, condoId, userId }) {
+  const payload = catalogPayload(table, form, links, { condoId, editing: Boolean(id) });
+  const data = await writeCatalogRow(table, payload, id);
+  const savedId = id || data?.id;
+  if (!savedId) throw new Error('Não foi possível salvar.');
+  await applyCatalogLinks(table, savedId, links || {});
+  if (table === 'fornecedores' && logoFile) {
+    await salvarLogoFornecedor({
+      condominioId: condoId,
+      userId,
+      fornecedorId: savedId,
+      file: logoFile,
+    });
+  }
+  return savedId;
+}
+
+async function loadCatalogOptions(condoId) {
+  const [f, m, l] = await Promise.all([
+    supabase.from('fornecedores').select('id, nome').eq('condominio_id', condoId).order('nome'),
+    supabase.from('materiais').select('id, nome').eq('condominio_id', condoId).order('nome'),
+    supabase.from('locais').select('id, nome').eq('condominio_id', condoId).order('nome'),
+  ]);
+  return {
+    fornecedores: f.data || [],
+    materiais: m.data || [],
+    locais: l.data || [],
+  };
 }
 
 function relatedNome(rel) {
@@ -408,21 +598,6 @@ async function ensureJoin(table, row, conflict) {
     ignoreDuplicates: true,
   });
   if (error && error.code !== '23505') throw error;
-}
-
-async function linkMaterialRelations({ materialId, fornecedorId, localIds = [] }) {
-  if (!materialId) return;
-  if (fornecedorId) {
-    await supabase.from('materiais').update({ fornecedor_id: fornecedorId }).eq('id', materialId);
-  }
-  for (const localId of localIds) {
-    if (!localId) continue;
-    await ensureJoin(
-      'material_locais',
-      { material_id: materialId, local_id: localId },
-      'material_id,local_id',
-    );
-  }
 }
 
 function MultiCheck({ label, options, values, onChange, withLocalIcons = false }) {
@@ -697,6 +872,172 @@ function FormField({ table, col, form, setForm }) {
   );
 }
 
+function CatalogFormBody({
+  table,
+  form,
+  setForm,
+  links,
+  setLinks,
+  options,
+  logoFile,
+  setLogoFile,
+  logoUrl,
+}) {
+  return (
+    <>
+      {table === 'fornecedores' ? (
+        <>
+          <div className="catalog-form-grid">
+            <FormField table={table} col="razao_social" form={form} setForm={setForm} />
+            <FormField table={table} col="nome_fantasia" form={form} setForm={setForm} />
+          </div>
+          {['cnpj', 'contato', 'telefone'].map((col) => (
+            <FormField key={col} table={table} col={col} form={form} setForm={setForm} />
+          ))}
+          <div className="catalog-form-grid">
+            <FormField table={table} col="telefone1" form={form} setForm={setForm} />
+            <FormField table={table} col="telefone2" form={form} setForm={setForm} />
+          </div>
+          <FormField table={table} col="localizacao" form={form} setForm={setForm} />
+        </>
+      ) : table === 'materiais' ? (
+        <>
+          <FormField table={table} col="nome" form={form} setForm={setForm} />
+          <Field label="Fornecedor">
+            <select
+              value={links.fornecedorId}
+              onChange={(e) => setLinks({ ...links, fornecedorId: e.target.value })}
+            >
+              <option value="">Sem fornecedor</option>
+              {options.fornecedores.map((opt) => (
+                <option key={opt.id} value={opt.id}>{opt.nome}</option>
+              ))}
+            </select>
+          </Field>
+          <MultiCheck
+            label="Locais"
+            options={options.locais}
+            values={links.localIds}
+            onChange={(localIds) => setLinks({ ...links, localIds })}
+            withLocalIcons
+          />
+          <div className="catalog-form-section">
+            <h3>Garantia do produto</h3>
+            <p className="hint" style={{ marginTop: 0 }}>
+              A garantia fica vinculada a este produto. Não é um cadastro separado.
+            </p>
+            <div className="catalog-form-grid">
+              <FormField table={table} col="prazo_valor" form={form} setForm={setForm} />
+              <FormField table={table} col="prazo_unidade" form={form} setForm={setForm} />
+            </div>
+            <FormField table={table} col="data_fim" form={form} setForm={setForm} />
+            <FormField table={table} col="motivos_perda_garantia" form={form} setForm={setForm} />
+            <FormField table={table} col="descricao" form={form} setForm={setForm} />
+            <FormField table={table} col="telefone" form={form} setForm={setForm} />
+          </div>
+        </>
+      ) : (
+        CONFIG[table].fields.map((col) => (
+          <FormField key={col} table={table} col={col} form={form} setForm={setForm} />
+        ))
+      )}
+      {table === 'fornecedores' ? (
+        <div className="field">
+          <span>Logo da empresa</span>
+          {logoUrl && !logoFile ? <img className="catalog-edit-logo" src={logoUrl} alt="" /> : null}
+          <label className="catalog-file-pick">
+            {logoFile ? 'Trocar logo' : (logoUrl ? 'Trocar logo' : 'Enviar logo')}
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/*"
+              onChange={(e) => setLogoFile(e.target.files?.[0] || null)}
+            />
+          </label>
+          {logoFile ? <span className="hint catalog-file-name">{logoFile.name}</span> : null}
+        </div>
+      ) : null}
+      {table === 'locais' ? (
+        <MultiCheck
+          label="Produtos utilizados no local"
+          options={options.materiais}
+          values={links.materialIds}
+          onChange={(materialIds) => setLinks({ ...links, materialIds })}
+        />
+      ) : null}
+      {table === 'fornecedores' ? (
+        <MultiCheck
+          label="Produtos deste fornecedor"
+          options={options.materiais}
+          values={links.materialIds}
+          onChange={(materialIds) => setLinks({ ...links, materialIds })}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function CatalogEditPanel({
+  table,
+  recordId,
+  initialForm,
+  initialLinks,
+  options,
+  logoUrl,
+  condoId,
+  userId,
+  onSaved,
+  onCancel,
+}) {
+  const [form, setForm] = useState(initialForm);
+  const [links, setLinks] = useState(initialLinks);
+  const [logoFile, setLogoFile] = useState(null);
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  async function onSubmit(e) {
+    e.preventDefault();
+    if (saving) return;
+    setSaving(true);
+    setError('');
+    try {
+      await persistCatalogRecord({
+        table,
+        id: recordId,
+        form,
+        links,
+        logoFile,
+        condoId,
+        userId,
+      });
+      await onSaved();
+    } catch (err) {
+      setError(err.message || 'Não foi possível salvar.');
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form className="stack catalog-edit-form" onSubmit={onSubmit}>
+      <Alert error={error} />
+      <CatalogFormBody
+        table={table}
+        form={form}
+        setForm={setForm}
+        links={links}
+        setLinks={setLinks}
+        options={options}
+        logoFile={logoFile}
+        setLogoFile={setLogoFile}
+        logoUrl={logoUrl}
+      />
+      <div className="row">
+        <Btn variant="ghost" type="button" onClick={onCancel} disabled={saving}>Cancelar</Btn>
+        <Btn type="submit" icon="check" disabled={saving}>{saving ? 'Salvando…' : 'Salvar alterações'}</Btn>
+      </div>
+    </form>
+  );
+}
+
 export function CatalogList({ table }) {
   const { condoId, session } = useSession();
   const cfg = CONFIG[table];
@@ -720,6 +1061,8 @@ export function CatalogList({ table }) {
   const [detail, setDetail] = useState(null);
   const [detailStack, setDetailStack] = useState([]);
   const [relatedGroups, setRelatedGroups] = useState([]);
+  const [editState, setEditState] = useState(null);
+  const [editLoading, setEditLoading] = useState(false);
   const { editable, editing, showEditButton, canRole, toggleEditing } = useEditTela('manage_catalog');
 
   async function load() {
@@ -733,16 +1076,7 @@ export function CatalogList({ table }) {
   }
 
   async function loadOptions() {
-    const [f, m, l] = await Promise.all([
-      supabase.from('fornecedores').select('id, nome').eq('condominio_id', condoId).order('nome'),
-      supabase.from('materiais').select('id, nome').eq('condominio_id', condoId).order('nome'),
-      supabase.from('locais').select('id, nome').eq('condominio_id', condoId).order('nome'),
-    ]);
-    setOptions({
-      fornecedores: f.data || [],
-      materiais: m.data || [],
-      locais: l.data || [],
-    });
+    setOptions(await loadCatalogOptions(condoId));
   }
 
   useEffect(() => {
@@ -770,81 +1104,14 @@ export function CatalogList({ table }) {
     setSaving(true);
     setError('');
     try {
-      const payload = { condominio_id: condoId };
-      for (const col of cfg.fields) {
-        if (col === 'prazo_unidade' && (table === 'garantias' || table === 'materiais')) {
-          if (form.prazo_valor != null && form.prazo_valor !== '') {
-            payload.prazo_unidade = String(form.prazo_unidade || 'anos').trim().slice(0, 32);
-          }
-          continue;
-        }
-        const raw = form[col];
-        if (raw == null || raw === '') continue;
-        payload[col] = raw;
-      }
-
-      if (table === 'locais') {
-        payload.tipo = tipoForLocal(form.nome, form.descricao);
-        payload.area = areaForLocal(form.nome, form.descricao, form.area);
-        if (!form.area) throw new Error('Informe se o local é área privativa ou área comum.');
-      }
-      if (table === 'materiais' && links.fornecedorId) {
-        payload.fornecedor_id = links.fornecedorId;
-      }
-      if (table === 'fornecedores') {
-        const razao = String(form.razao_social || '').trim();
-        const fantasia = String(form.nome_fantasia || '').trim();
-        if (!razao) throw new Error('Informe a razão social.');
-        if (!fantasia) throw new Error('Informe o nome fantasia.');
-        payload.razao_social = razao;
-        payload.nome_fantasia = fantasia;
-        payload.nome = fantasia;
-        if (payload.cnpj != null) payload.cnpj = normalizarCnpj(payload.cnpj);
-        for (const key of ['telefone', 'telefone1', 'telefone2']) {
-          if (payload[key]) payload[key] = formatTelefone(payload[key]);
-        }
-      }
-      if ((table === 'garantias' || table === 'materiais') && payload.prazo_valor != null && payload.prazo_valor !== '') {
-        payload.prazo_valor = Number(payload.prazo_valor);
-      }
-      if ((table === 'garantias' || table === 'materiais') && payload.telefone) {
-        payload.telefone = formatTelefone(payload.telefone);
-      }
-
-      const data = await insertCatalogRow(table, payload);
-      const newId = data?.id;
-
-      if (table === 'materiais' && newId) {
-        await linkMaterialRelations({
-          materialId: newId,
-          fornecedorId: links.fornecedorId || null,
-          localIds: links.localIds,
-        });
-      }
-
-      if (table === 'locais' && newId) {
-        for (const materialId of links.materialIds) {
-          await linkMaterialRelations({
-            materialId,
-            localIds: [newId],
-          });
-        }
-      }
-
-      if (table === 'fornecedores' && newId) {
-        for (const materialId of links.materialIds) {
-          await supabase.from('materiais').update({ fornecedor_id: newId }).eq('id', materialId);
-        }
-        if (logoFile) {
-          await salvarLogoFornecedor({
-            condominioId: condoId,
-            userId: session.user.id,
-            fornecedorId: newId,
-            file: logoFile,
-          });
-        }
-      }
-
+      await persistCatalogRecord({
+        table,
+        form,
+        links,
+        logoFile,
+        condoId,
+        userId: session.user.id,
+      });
       setForm({});
       setLogoFile(null);
       setLinks({ fornecedorId: '', materialIds: [], localIds: [] });
@@ -861,8 +1128,10 @@ export function CatalogList({ table }) {
   const selected = detail?.row || null;
   const detailTable = detail?.table || table;
   const detailFields = selected ? detailFieldsFor(detailTable, selected) : [];
+  const editingRecord = Boolean(editState && editState.id === selected?.id && editState.table === detailTable);
 
   function openRecord(row) {
+    setEditState(null);
     setDetailStack([]);
     setDetail({ table, row });
   }
@@ -872,6 +1141,7 @@ export function CatalogList({ table }) {
     if (!link) return;
     try {
       setError('');
+      setEditState(null);
       const row = await loadCatalogRow(link.table, link.id);
       setDetailStack((stack) => (detail ? [...stack, detail] : stack));
       setDetail({ table: link.table, row });
@@ -881,6 +1151,10 @@ export function CatalogList({ table }) {
   }
 
   function closeDetail() {
+    if (editState) {
+      setEditState(null);
+      return;
+    }
     if (detailStack.length) {
       const prev = detailStack[detailStack.length - 1];
       setDetailStack(detailStack.slice(0, -1));
@@ -888,6 +1162,34 @@ export function CatalogList({ table }) {
       return;
     }
     setDetail(null);
+  }
+
+  async function beginEdit() {
+    if (!selected?.id) return;
+    setEditLoading(true);
+    setError('');
+    try {
+      const linksLoaded = await linksDoRegistro(detailTable, selected);
+      setEditState({
+        table: detailTable,
+        id: selected.id,
+        form: formFromRow(detailTable, selected),
+        links: linksLoaded,
+        logoUrl: selected.logoUrl || '',
+      });
+    } catch (err) {
+      setError(err.message || 'Não foi possível abrir a edição.');
+    } finally {
+      setEditLoading(false);
+    }
+  }
+
+  async function afterEdit() {
+    if (!editState?.id) return;
+    const fresh = await loadCatalogRow(editState.table, editState.id);
+    setDetail({ table: editState.table, row: fresh });
+    setEditState(null);
+    await Promise.all([load(), loadOptions()]);
   }
 
   return (
@@ -922,95 +1224,16 @@ export function CatalogList({ table }) {
       {editable ? (
         <form className="panel stack catalog-form" onSubmit={add}>
           <h2>{cfg.createTitle}</h2>
-          {table === 'fornecedores' ? (
-            <>
-              <div className="catalog-form-grid">
-                <FormField table={table} col="razao_social" form={form} setForm={setForm} />
-                <FormField table={table} col="nome_fantasia" form={form} setForm={setForm} />
-              </div>
-              {['cnpj', 'contato', 'telefone'].map((col) => (
-                <FormField key={col} table={table} col={col} form={form} setForm={setForm} />
-              ))}
-              <div className="catalog-form-grid">
-                <FormField table={table} col="telefone1" form={form} setForm={setForm} />
-                <FormField table={table} col="telefone2" form={form} setForm={setForm} />
-              </div>
-              <FormField table={table} col="localizacao" form={form} setForm={setForm} />
-            </>
-          ) : table === 'materiais' ? (
-            <>
-              <FormField table={table} col="nome" form={form} setForm={setForm} />
-              <Field label="Fornecedor">
-                <select
-                  value={links.fornecedorId}
-                  onChange={(e) => setLinks({ ...links, fornecedorId: e.target.value })}
-                >
-                  <option value="">Sem fornecedor</option>
-                  {options.fornecedores.map((opt) => (
-                    <option key={opt.id} value={opt.id}>{opt.nome}</option>
-                  ))}
-                </select>
-              </Field>
-              <MultiCheck
-                label="Locais"
-                options={options.locais}
-                values={links.localIds}
-                onChange={(localIds) => setLinks({ ...links, localIds })}
-                withLocalIcons
-              />
-              <div className="catalog-form-section">
-                <h3>Garantia do produto</h3>
-                <p className="hint" style={{ marginTop: 0 }}>
-                  A garantia fica vinculada a este produto. Não é um cadastro separado.
-                </p>
-                <div className="catalog-form-grid">
-                  <FormField table={table} col="prazo_valor" form={form} setForm={setForm} />
-                  <FormField table={table} col="prazo_unidade" form={form} setForm={setForm} />
-                </div>
-                <FormField table={table} col="data_fim" form={form} setForm={setForm} />
-                <FormField table={table} col="motivos_perda_garantia" form={form} setForm={setForm} />
-                <FormField table={table} col="descricao" form={form} setForm={setForm} />
-                <FormField table={table} col="telefone" form={form} setForm={setForm} />
-              </div>
-            </>
-          ) : (
-            cfg.fields.map((col) => (
-              <FormField key={col} table={table} col={col} form={form} setForm={setForm} />
-            ))
-          )}
-          {table === 'fornecedores' ? (
-            <div className="field">
-              <span>Logo da empresa</span>
-              <label className="catalog-file-pick">
-                {logoFile ? 'Trocar logo' : 'Enviar logo'}
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp,image/*"
-                  onChange={(e) => setLogoFile(e.target.files?.[0] || null)}
-                />
-              </label>
-              {logoFile ? <span className="hint catalog-file-name">{logoFile.name}</span> : null}
-            </div>
-          ) : null}
-
-          {table === 'locais' ? (
-            <MultiCheck
-              label="Produtos utilizados no local"
-              options={options.materiais}
-              values={links.materialIds}
-              onChange={(materialIds) => setLinks({ ...links, materialIds })}
-            />
-          ) : null}
-
-          {table === 'fornecedores' ? (
-            <MultiCheck
-              label="Produtos deste fornecedor"
-              options={options.materiais}
-              values={links.materialIds}
-              onChange={(materialIds) => setLinks({ ...links, materialIds })}
-            />
-          ) : null}
-
+          <CatalogFormBody
+            table={table}
+            form={form}
+            setForm={setForm}
+            links={links}
+            setLinks={setLinks}
+            options={options}
+            logoFile={logoFile}
+            setLogoFile={setLogoFile}
+          />
           <Btn type="submit" icon="check" disabled={saving}>{saving ? 'Salvando…' : 'Salvar'}</Btn>
         </form>
       ) : !canRole ? (
@@ -1021,17 +1244,40 @@ export function CatalogList({ table }) {
 
       <Modal
         open={Boolean(selected)}
-        title={listTitle(detailTable, selected) || CONFIG[detailTable]?.title || cfg.title}
+        title={editingRecord
+          ? `Editar ${listTitle(detailTable, selected) || 'registro'}`
+          : (listTitle(detailTable, selected) || CONFIG[detailTable]?.title || cfg.title)}
         onClose={closeDetail}
         className="modal-sheet--catalog"
+        footer={!editingRecord && editable ? (
+          <Btn icon="pencil" onClick={beginEdit} disabled={editLoading}>
+            {editLoading ? 'Abrindo…' : 'Editar'}
+          </Btn>
+        ) : null}
       >
-        <CatalogDetailView
-          fields={detailFields}
-          relatedGroups={relatedGroups}
-          onOpenRelated={openRelated}
-          logoUrl={selected?.logoUrl}
-          iconName={detailTable === 'locais' ? iconForLocal(selected?.nome, selected?.descricao) : ''}
-        />
+        {editingRecord ? (
+          <CatalogEditPanel
+            key={`${editState.table}-${editState.id}`}
+            table={editState.table}
+            recordId={editState.id}
+            initialForm={editState.form}
+            initialLinks={editState.links}
+            options={options}
+            logoUrl={editState.logoUrl}
+            condoId={condoId}
+            userId={session.user.id}
+            onSaved={afterEdit}
+            onCancel={() => setEditState(null)}
+          />
+        ) : (
+          <CatalogDetailView
+            fields={detailFields}
+            relatedGroups={relatedGroups}
+            onOpenRelated={openRelated}
+            logoUrl={selected?.logoUrl}
+            iconName={detailTable === 'locais' ? iconForLocal(selected?.nome, selected?.descricao) : ''}
+          />
+        )}
       </Modal>
     </Page>
   );
@@ -1040,10 +1286,15 @@ export function CatalogList({ table }) {
 export function CatalogDetail({ table }) {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { condoId, session } = useSession();
+  const { editable } = useEditTela('manage_catalog');
   const cfg = CONFIG[table];
   const [row, setRow] = useState(null);
   const [relatedGroups, setRelatedGroups] = useState([]);
+  const [options, setOptions] = useState({ fornecedores: [], materiais: [], locais: [] });
   const [error, setError] = useState('');
+  const [editState, setEditState] = useState(null);
+  const [editLoading, setEditLoading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -1060,22 +1311,83 @@ export function CatalogDetail({ table }) {
     return () => { cancelled = true; };
   }, [id, table]);
 
+  useEffect(() => {
+    if (!condoId) return undefined;
+    let cancelled = false;
+    loadCatalogOptions(condoId).then((next) => {
+      if (!cancelled) setOptions(next);
+    });
+    return () => { cancelled = true; };
+  }, [condoId]);
+
+  async function beginEdit() {
+    if (!row?.id) return;
+    setEditLoading(true);
+    setError('');
+    try {
+      const linksLoaded = await linksDoRegistro(table, row);
+      setEditState({
+        form: formFromRow(table, row),
+        links: linksLoaded,
+        logoUrl: row.logoUrl || '',
+      });
+    } catch (err) {
+      setError(err.message || 'Não foi possível abrir a edição.');
+    } finally {
+      setEditLoading(false);
+    }
+  }
+
+  async function afterEdit() {
+    const fresh = await loadCatalogRow(table, id);
+    setRow(fresh);
+    setRelatedGroups(await loadRelatedGroups(table, id));
+    setEditState(null);
+  }
+
   return (
     <Page title={cfg.title}>
       <Alert error={error} />
       <Modal
         open={Boolean(row)}
-        title={listTitle(table, row) || cfg.title}
-        onClose={() => navigate(cfg.path)}
+        title={editState ? `Editar ${listTitle(table, row) || 'registro'}` : (listTitle(table, row) || cfg.title)}
+        onClose={() => {
+          if (editState) {
+            setEditState(null);
+            return;
+          }
+          navigate(cfg.path);
+        }}
         className="modal-sheet--catalog"
+        footer={!editState && editable ? (
+          <Btn icon="pencil" onClick={beginEdit} disabled={editLoading}>
+            {editLoading ? 'Abrindo…' : 'Editar'}
+          </Btn>
+        ) : null}
       >
-        <CatalogDetailView
-          fields={detailFieldsFor(table, row)}
-          relatedGroups={relatedGroups}
-          onOpenRelated={(item) => item?.to && navigate(item.to)}
-          logoUrl={row?.logoUrl}
-          iconName={table === 'locais' ? iconForLocal(row?.nome, row?.descricao) : ''}
-        />
+        {editState ? (
+          <CatalogEditPanel
+            key={id}
+            table={table}
+            recordId={id}
+            initialForm={editState.form}
+            initialLinks={editState.links}
+            options={options}
+            logoUrl={editState.logoUrl}
+            condoId={condoId || row?.condominio_id}
+            userId={session?.user?.id}
+            onSaved={afterEdit}
+            onCancel={() => setEditState(null)}
+          />
+        ) : (
+          <CatalogDetailView
+            fields={detailFieldsFor(table, row)}
+            relatedGroups={relatedGroups}
+            onOpenRelated={(item) => item?.to && navigate(item.to)}
+            logoUrl={row?.logoUrl}
+            iconName={table === 'locais' ? iconForLocal(row?.nome, row?.descricao) : ''}
+          />
+        )}
       </Modal>
     </Page>
   );

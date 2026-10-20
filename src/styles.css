@@ -6291,6 +6291,16 @@ textarea.tall { min-height: 150px; font-family: Consolas, "Courier New", monospa
 
 /* Catálogo: detalhe + vínculos (contraste no shell do condomínio) */
 .catalog-form { margin-top: 16px; min-width: 0; max-width: 100%; }
+.catalog-edit-form { min-width: 0; }
+.catalog-edit-logo {
+  display: block;
+  width: 72px;
+  height: 72px;
+  object-fit: contain;
+  margin: 0 0 8px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+}
 .catalog-form-section {
   display: grid;
   gap: 12px;
