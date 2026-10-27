@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useSession } from '../lib/session';
 import { publicOrSignedUrl, salvarLogoFornecedor } from '../lib/api';
-import { formatCnpj, formatDate, formatTelefone, normalizarCnpj } from '../lib/format';
+import { formatCnpj, formatDate, formatDbError, formatTelefone, normalizarCnpj } from '../lib/format';
 import { Alert, Btn, Field, MaskedInput, Page } from '../components/ui';
 import { Icon } from '../components/icons';
 import { EditTelaButton, useEditTela } from '../components/EditTela';
@@ -307,6 +307,63 @@ async function syncFornecedorMateriais(fornecedorId, materialIds) {
     const upd = await supabase.from('materiais').update({ fornecedor_id: fornecedorId }).in('id', add);
     if (upd.error) throw upd.error;
   }
+}
+
+function erroOpcional(error) {
+  if (!error) return false;
+  const code = String(error.code || '');
+  const msg = String(error.message || error.details || '');
+  return isMissingColumnError(error)
+    || code === '42P01'
+    || code === 'PGRST205'
+    || /does not exist|schema cache|could not find the table/i.test(msg);
+}
+
+async function apagarOnde(table, column, id) {
+  const { error } = await supabase.from(table).delete().eq(column, id);
+  if (error && !erroOpcional(error)) throw new Error(formatDbError(error, table));
+}
+
+async function excluirRegistroCatalogo(table, id) {
+  if (table === 'fornecedores') {
+    const upd = await supabase.from('materiais').update({ fornecedor_id: null }).eq('fornecedor_id', id);
+    if (upd.error && !erroOpcional(upd.error)) throw new Error(formatDbError(upd.error, 'materiais'));
+    await apagarOnde('fornecedor_garantias', 'fornecedor_id', id);
+  }
+  if (table === 'materiais') {
+    await apagarOnde('material_locais', 'material_id', id);
+    await apagarOnde('material_garantias', 'material_id', id);
+  }
+  if (table === 'locais') {
+    await apagarOnde('material_locais', 'local_id', id);
+    const chamados = await supabase.from('chamados').update({ local_id: null }).eq('local_id', id);
+    if (chamados.error && !erroOpcional(chamados.error)) throw new Error(formatDbError(chamados.error, 'chamados'));
+  }
+  const { error } = await supabase.from(table).delete().eq('id', id);
+  if (error) {
+    if (error.code === '23503') {
+      throw new Error('Este registro ainda está ligado a outro cadastro e não pôde ser excluído.');
+    }
+    throw new Error(formatDbError(error, table));
+  }
+}
+
+function CatalogDeletePanel({ nome, busy, error, onConfirm, onCancel }) {
+  return (
+    <div className="stack">
+      <Alert error={error} />
+      <p>
+        Excluir <strong>{nome || 'este registro'}</strong>? Esta ação não pode ser desfeita.
+      </p>
+      <p className="hint">Os vínculos com outros itens do catálogo são desfeitos. O restante do cadastro permanece.</p>
+      <div className="row">
+        <Btn variant="danger" icon="trash" type="button" onClick={onConfirm} disabled={busy}>
+          {busy ? 'Excluindo…' : 'Excluir registro'}
+        </Btn>
+        <Btn variant="ghost" type="button" onClick={onCancel} disabled={busy}>Cancelar</Btn>
+      </div>
+    </div>
+  );
 }
 
 async function applyCatalogLinks(table, id, links) {
@@ -1063,6 +1120,8 @@ export function CatalogList({ table }) {
   const [relatedGroups, setRelatedGroups] = useState([]);
   const [editState, setEditState] = useState(null);
   const [editLoading, setEditLoading] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deletingBusy, setDeletingBusy] = useState(false);
   const { editable, editing, showEditButton, canRole, toggleEditing } = useEditTela('manage_catalog');
 
   async function load() {
@@ -1129,9 +1188,11 @@ export function CatalogList({ table }) {
   const detailTable = detail?.table || table;
   const detailFields = selected ? detailFieldsFor(detailTable, selected) : [];
   const editingRecord = Boolean(editState && editState.id === selected?.id && editState.table === detailTable);
+  const podeExcluir = editable && ['fornecedores', 'materiais', 'locais'].includes(detailTable);
 
   function openRecord(row) {
     setEditState(null);
+    setDeleting(false);
     setDetailStack([]);
     setDetail({ table, row });
   }
@@ -1142,6 +1203,7 @@ export function CatalogList({ table }) {
     try {
       setError('');
       setEditState(null);
+      setDeleting(false);
       const row = await loadCatalogRow(link.table, link.id);
       setDetailStack((stack) => (detail ? [...stack, detail] : stack));
       setDetail({ table: link.table, row });
@@ -1153,6 +1215,10 @@ export function CatalogList({ table }) {
   function closeDetail() {
     if (editState) {
       setEditState(null);
+      return;
+    }
+    if (deleting) {
+      setDeleting(false);
       return;
     }
     if (detailStack.length) {
@@ -1190,6 +1256,24 @@ export function CatalogList({ table }) {
     setDetail({ table: editState.table, row: fresh });
     setEditState(null);
     await Promise.all([load(), loadOptions()]);
+  }
+
+  async function confirmDelete() {
+    if (!selected?.id || deletingBusy) return;
+    setDeletingBusy(true);
+    setError('');
+    try {
+      await excluirRegistroCatalogo(detailTable, selected.id);
+      setDeleting(false);
+      setDetail(null);
+      setDetailStack([]);
+      setEditState(null);
+      await Promise.all([load(), loadOptions()]);
+    } catch (err) {
+      setError(err.message || 'Não foi possível excluir.');
+    } finally {
+      setDeletingBusy(false);
+    }
   }
 
   return (
@@ -1246,16 +1330,31 @@ export function CatalogList({ table }) {
         open={Boolean(selected)}
         title={editingRecord
           ? `Editar ${listTitle(detailTable, selected) || 'registro'}`
-          : (listTitle(detailTable, selected) || CONFIG[detailTable]?.title || cfg.title)}
+          : deleting
+            ? `Excluir ${listTitle(detailTable, selected) || 'registro'}`
+            : (listTitle(detailTable, selected) || CONFIG[detailTable]?.title || cfg.title)}
         onClose={closeDetail}
         className="modal-sheet--catalog"
-        footer={!editingRecord && editable ? (
-          <Btn icon="pencil" onClick={beginEdit} disabled={editLoading}>
-            {editLoading ? 'Abrindo…' : 'Editar'}
-          </Btn>
+        footer={!editingRecord && !deleting && editable ? (
+          <>
+            <Btn icon="pencil" onClick={beginEdit} disabled={editLoading}>
+              {editLoading ? 'Abrindo…' : 'Editar'}
+            </Btn>
+            {podeExcluir ? (
+              <Btn variant="danger" icon="trash" onClick={() => setDeleting(true)}>Excluir</Btn>
+            ) : null}
+          </>
         ) : null}
       >
-        {editingRecord ? (
+        {deleting ? (
+          <CatalogDeletePanel
+            nome={listTitle(detailTable, selected)}
+            busy={deletingBusy}
+            error={error}
+            onConfirm={confirmDelete}
+            onCancel={() => setDeleting(false)}
+          />
+        ) : editingRecord ? (
           <CatalogEditPanel
             key={`${editState.table}-${editState.id}`}
             table={editState.table}
@@ -1295,6 +1394,9 @@ export function CatalogDetail({ table }) {
   const [error, setError] = useState('');
   const [editState, setEditState] = useState(null);
   const [editLoading, setEditLoading] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deletingBusy, setDeletingBusy] = useState(false);
+  const podeExcluir = editable && ['fornecedores', 'materiais', 'locais'].includes(table);
 
   useEffect(() => {
     let cancelled = false;
@@ -1345,27 +1447,61 @@ export function CatalogDetail({ table }) {
     setEditState(null);
   }
 
+  async function confirmDelete() {
+    if (!row?.id || deletingBusy) return;
+    setDeletingBusy(true);
+    setError('');
+    try {
+      await excluirRegistroCatalogo(table, row.id);
+      navigate(cfg.path);
+    } catch (err) {
+      setError(err.message || 'Não foi possível excluir.');
+      setDeletingBusy(false);
+    }
+  }
+
   return (
     <Page title={cfg.title}>
       <Alert error={error} />
       <Modal
         open={Boolean(row)}
-        title={editState ? `Editar ${listTitle(table, row) || 'registro'}` : (listTitle(table, row) || cfg.title)}
+        title={editState
+          ? `Editar ${listTitle(table, row) || 'registro'}`
+          : deleting
+            ? `Excluir ${listTitle(table, row) || 'registro'}`
+            : (listTitle(table, row) || cfg.title)}
         onClose={() => {
           if (editState) {
             setEditState(null);
             return;
           }
+          if (deleting) {
+            setDeleting(false);
+            return;
+          }
           navigate(cfg.path);
         }}
         className="modal-sheet--catalog"
-        footer={!editState && editable ? (
-          <Btn icon="pencil" onClick={beginEdit} disabled={editLoading}>
-            {editLoading ? 'Abrindo…' : 'Editar'}
-          </Btn>
+        footer={!editState && !deleting && editable ? (
+          <>
+            <Btn icon="pencil" onClick={beginEdit} disabled={editLoading}>
+              {editLoading ? 'Abrindo…' : 'Editar'}
+            </Btn>
+            {podeExcluir ? (
+              <Btn variant="danger" icon="trash" onClick={() => setDeleting(true)}>Excluir</Btn>
+            ) : null}
+          </>
         ) : null}
       >
-        {editState ? (
+        {deleting ? (
+          <CatalogDeletePanel
+            nome={listTitle(table, row)}
+            busy={deletingBusy}
+            error={error}
+            onConfirm={confirmDelete}
+            onCancel={() => setDeleting(false)}
+          />
+        ) : editState ? (
           <CatalogEditPanel
             key={id}
             table={table}

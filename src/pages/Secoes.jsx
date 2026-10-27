@@ -1,14 +1,12 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useSession } from '../lib/session';
-import { ehCargoConstrutora } from '../lib/permissions';
 import { Alert, Btn, CoverHero, CoverImage, Empty, Field, Page, PageTitleRules } from '../components/ui';
 import { EditTelaButton, useEditTela } from '../components/EditTela';
 import { VisaoGeralPainel } from '../components/VisaoGeralPainel';
 
 export function SecoesPage({ table, title, lead, extra, cover, hero = false }) {
   const { condoId, branding, cargoTipo } = useSession();
-  const ehConstrutora = ehCargoConstrutora(cargoTipo);
   const [rows, setRows] = useState([]);
   const [form, setForm] = useState({ titulo: '', texto: '' });
   const [error, setError] = useState('');
@@ -64,7 +62,7 @@ export function SecoesPage({ table, title, lead, extra, cover, hero = false }) {
       <Alert error={error} />
       {extra}
       {table === 'visao_geral_secoes' ? <VisaoGeralPainel /> : null}
-      {rows.length && !ehConstrutora && !(table === 'visao_geral_secoes' && String(cargoTipo || '').toLowerCase() === 'morador') ? (
+      {rows.length && !(table === 'visao_geral_secoes' && String(cargoTipo || '').toLowerCase() === 'morador') ? (
         <div className="stack secoes-list">
           {rows.map((row) => (
             <article key={row.id} className="secao-block">

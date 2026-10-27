@@ -6,7 +6,7 @@ import { aplicarEscopoChamados, can, ehCargoAdministracao, ehCargoConstrutora, e
 import { chamadoNumero, embedOne, formatDate, formatTelefone, labelUnidade, maintenanceTone, nomePessoa } from '../lib/format';
 import { mapaLeituraConversas } from '../lib/notifications';
 import { useChatAoVivo } from '../lib/chatAoVivo';
-import { arquivoEhImagem, hidratarNomesMensagens, resolverUrlArquivo, resolverVisitaAgendadaChamado, resumoOperacionalCondominio } from '../lib/api';
+import { arquivoEhImagem, hidratarNomesMensagens, resolverUrlArquivo, resolverVisitaAgendadaChamado } from '../lib/api';
 import { previewTextoChat } from '../lib/chamadoRastreabilidade';
 import { Badge, ChamadoAdminTag } from './ui';
 import { Icon } from './icons';
@@ -22,8 +22,11 @@ function atalhosPara(cargoTipo) {
   const t = String(cargoTipo || '').toLowerCase();
   if (ehCargoConstrutora(t)) {
     return [
-      { to: '/governanca-tecnica', icon: 'clipboard', label: 'Governança técnica', hint: 'Laudos e chat com a Gestão Técnica' },
+      { to: '/chamados', icon: 'message', label: 'Chamados', hint: 'Ocorrências do condomínio' },
       { to: '/manutencao', icon: 'wrench', label: 'Manutenções', hint: 'Agenda preventiva' },
+      { to: '/documentos', icon: 'folder', label: 'Documentos', hint: 'Arquivos do empreendimento' },
+      { to: '/governanca-tecnica', icon: 'clipboard', label: 'Governança técnica', hint: 'Laudos do condomínio' },
+      { to: '/materiais', icon: 'shield', label: 'Garantias', hint: 'Prazos no produto' },
     ];
   }
   if (can(t, 'manage_traceability')) {
@@ -58,16 +61,6 @@ function atalhosPara(cargoTipo) {
 
 function dadosDe(res) {
   return res?.data || [];
-}
-
-function dataBoletim(value) {
-  if (!value) return { day: '—', month: '' };
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return { day: '—', month: '' };
-  return {
-    day: String(d.getDate()).padStart(2, '0'),
-    month: d.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', ''),
-  };
 }
 
 function ehAtualizacao(row, leitura, notifIds) {
@@ -181,7 +174,6 @@ export function VisaoGeralPainel() {
   const [stats, setStats] = useState({ aberto: 0, andamento: 0, concluido: 0, total: 0, manutencoes: 0, laudos: 0 });
   const [chamados, setChamados] = useState([]);
   const [atualizacoes, setAtualizacoes] = useState([]);
-  const [boletins, setBoletins] = useState([]);
   const [documentos, setDocumentos] = useState([]);
   const [conversaMsgs, setConversaMsgs] = useState([]);
   const [conversaDestaqueId, setConversaDestaqueId] = useState(null);
@@ -192,7 +184,6 @@ export function VisaoGeralPainel() {
   const [contatos, setContatos] = useState([]);
   const verTodosChamados = can(cargoTipo, 'view_all_tickets');
   const isMorador = String(cargoTipo || '').toLowerCase() === 'morador';
-  const ehConstrutora = ehCargoConstrutora(cargoTipo);
   const ehAdminCondo = ehCargoAdministracao(cargoTipo);
   const atalhos = atalhosPara(cargoTipo);
 
@@ -200,39 +191,6 @@ export function VisaoGeralPainel() {
     if (!condoId || !session?.user?.id) return undefined;
     let live = true;
     (async () => {
-      if (ehConstrutora) {
-        const [resumo, manutRes] = await Promise.all([
-          resumoOperacionalCondominio(condoId),
-          supabase
-            .from('manutencoes_preventivas')
-            .select('id, sistema, tipo, proxima_execucao, ativo')
-            .eq('condominio_id', condoId)
-            .eq('ativo', true)
-            .order('proxima_execucao', { ascending: true })
-            .limit(6),
-        ]);
-        if (!live) return;
-        const listaManut = dadosDe(manutRes);
-        setStats({
-          aberto: resumo?.aberto || 0,
-          andamento: resumo?.andamento || 0,
-          concluido: resumo?.concluido || 0,
-          total: resumo?.total || 0,
-          manutencoes: resumo?.manutencoes ?? listaManut.length,
-          laudos: resumo?.laudos || 0,
-        });
-        setChamados([]);
-        setAtualizacoes([]);
-        setBoletins([]);
-        setDocumentos([]);
-        setConversaMsgs([]);
-        setVisitaAtual(null);
-        setLeituraChamados({});
-        setManutencoes(listaManut);
-        setContatos([]);
-        return;
-      }
-
       let statsQ = supabase
         .from('chamados')
         .select('status, origem')
@@ -247,16 +205,9 @@ export function VisaoGeralPainel() {
         .limit(isMorador ? 12 : 5);
       chamadosQ = aplicarEscopoChamados(chamadosQ, cargoTipo, session.user.id);
 
-      const [statsRes, chamadosRes, boletinsRes, manutRes, manutCountRes, contatosRes, leitura, notifRes, docsRes] = await Promise.all([
+      const [statsRes, chamadosRes, manutRes, manutCountRes, contatosRes, leitura, notifRes, docsRes] = await Promise.all([
         statsQ,
         chamadosQ,
-        supabase
-          .from('boletins_informativos')
-          .select('id, titulo, subtitulo, data_publicacao, created_at')
-          .eq('condominio_id', condoId)
-          .eq('publicado', true)
-          .order('data_publicacao', { ascending: false })
-          .limit(5),
         supabase
           .from('manutencoes_preventivas')
           .select('id, sistema, tipo, proxima_execucao, ativo')
@@ -339,7 +290,6 @@ export function VisaoGeralPainel() {
       });
       setChamados(listaChamados);
       setAtualizacoes(listaChamados.filter((row) => ehAtualizacao(row, leitura.byChamado, notifIds)).slice(0, 4));
-      setBoletins(dadosDe(boletinsRes));
       setManutencoes(dadosDe(manutRes));
       setContatos(dadosDe(contatosRes).filter((row) => row.ativo !== false).slice(0, 4));
       const docs = await Promise.all(dadosDe(docsRes).map(async (row) => {
@@ -372,87 +322,14 @@ export function VisaoGeralPainel() {
     return () => {
       live = false;
     };
-  }, [condoId, session?.user?.id, verTodosChamados, isMorador, ehConstrutora, cargoTipo, ehAdminCondo, versao]);
+  }, [condoId, session?.user?.id, verTodosChamados, isMorador, cargoTipo, ehAdminCondo, versao]);
 
   useChatAoVivo({
     conversaId: isMorador ? conversaDestaqueId : null,
     onAtualizar: () => setVersao((v) => v + 1),
   });
 
-  if (ehConstrutora) {
-    return (
-      <div className="vg-painel vg-painel--construtora">
-        <section className="vg-shortcuts" aria-label="Atalhos">
-          {atalhos.map((item) => (
-            <Link key={item.to} className="vg-shortcut" to={item.to}>
-              <span className="vg-shortcut-icon" aria-hidden="true">
-                <Icon name={item.icon} size={20} />
-              </span>
-              <span className="vg-shortcut-copy">
-                <strong>{item.label}</strong>
-                <small>{item.hint}</small>
-              </span>
-            </Link>
-          ))}
-        </section>
-
-        <section className="vg-kpis" aria-label="Números dos chamados">
-          <article>
-            <span>Chamados abertos</span>
-            <strong>{stats.aberto}</strong>
-          </article>
-          <article>
-            <span>Em andamento</span>
-            <strong>{stats.andamento}</strong>
-          </article>
-          <article>
-            <span>Concluídos</span>
-            <strong>{stats.concluido}</strong>
-          </article>
-          <article>
-            <span>Total de chamados</span>
-            <strong>{stats.total}</strong>
-          </article>
-          <article>
-            <span>Manutenções ativas</span>
-            <strong>{stats.manutencoes}</strong>
-          </article>
-          <article>
-            <span>Laudos</span>
-            <strong>{stats.laudos}</strong>
-          </article>
-        </section>
-
-        <section className="vg-card">
-          <header className="vg-card-head">
-            <h3>Próximas manutenções</h3>
-            <Link to="/manutencao">Agenda</Link>
-          </header>
-          {!manutencoes.length ? (
-            <p className="vg-empty">Nenhuma manutenção preventiva na agenda.</p>
-          ) : (
-            <ul className="vg-list">
-              {manutencoes.map((row) => (
-                <li key={row.id}>
-                  <Link to="/manutencao">
-                    <strong>{row.sistema || row.tipo || 'Manutenção'}</strong>
-                    <small>
-                      {[formatDate(row.proxima_execucao), row.tipo, TOM_MANUTENCAO[maintenanceTone(row)]]
-                        .filter(Boolean)
-                        .join(' · ')}
-                    </small>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-      </div>
-    );
-  }
-
   if (isMorador) {
-    const boletinsVisiveis = boletins.slice(0, 4);
     const chamadoAtual = chamadoDaVez(chamados);
     const docsVisiveis = documentos.slice(0, 3);
     const manutVisiveis = manutencoes.slice(0, 4);
@@ -465,36 +342,6 @@ export function VisaoGeralPainel() {
     const temMsgNova = leituraAtual?.estado === 'nova' || leituraAtual?.estado === 'nao_lida';
     return (
       <div className="vg-painel vg-painel--morador">
-        <section className="vg-card vg-boletins" aria-label="Boletins informativos">
-          <header className="vg-card-head">
-            <h3>Boletins informativos</h3>
-            <VerTodos to="/boletins" show={boletins.length > boletinsVisiveis.length} />
-          </header>
-          {!boletinsVisiveis.length ? (
-            <p className="vg-empty">Nenhum boletim publicado ainda.</p>
-          ) : (
-            <ul className="vg-boletim-stack">
-              {boletinsVisiveis.map((row, index) => {
-                const data = dataBoletim(row.data_publicacao || row.created_at);
-                return (
-                  <li key={row.id}>
-                    <Link className={`vg-boletim${index === 0 ? ' vg-boletim--destaque' : ''}`} to="/boletins">
-                      <span className="vg-boletim-date" aria-hidden="true">
-                        <strong>{data.day}</strong>
-                        <small>{data.month}</small>
-                      </span>
-                      <span className="vg-boletim-copy">
-                        <strong>{row.titulo}</strong>
-                        {row.subtitulo ? <small>{row.subtitulo}</small> : null}
-                      </span>
-                    </Link>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </section>
-
         {chamadoAtual ? (
           <section className="vg-card vg-boletins" aria-label="Assistência técnica">
             <header className="vg-card-head">
@@ -718,29 +565,6 @@ export function VisaoGeralPainel() {
                       {[formatDate(row.proxima_execucao), row.tipo, TOM_MANUTENCAO[maintenanceTone(row)]]
                         .filter(Boolean)
                         .join(' · ')}
-                    </small>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-
-        <section className="vg-card">
-          <header className="vg-card-head">
-            <h3>Boletins recentes</h3>
-            <Link to="/boletins">Ver todos</Link>
-          </header>
-          {!boletins.length ? (
-            <p className="vg-empty">Nenhum boletim publicado ainda.</p>
-          ) : (
-            <ul className="vg-list">
-              {boletins.map((row) => (
-                <li key={row.id}>
-                  <Link to="/boletins">
-                    <strong>{row.titulo}</strong>
-                    <small>
-                      {[row.subtitulo, formatDate(row.data_publicacao || row.created_at)].filter(Boolean).join(' · ')}
                     </small>
                   </Link>
                 </li>

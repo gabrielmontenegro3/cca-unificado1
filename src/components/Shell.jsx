@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { NavLink, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useSession } from '../lib/session';
-import { CARGO_LABEL, ehCargoConstrutora, navGroupsFor } from '../lib/permissions';
+import { CARGO_LABEL, navGroupsFor } from '../lib/permissions';
 import { BrandLogo, UserAvatar } from './ui';
 import { Icon } from './icons';
 import { loginPathDaConstrutora, loginPathDoCondominio, nomeExibicaoConstrutora } from '../lib/branding';
@@ -134,7 +134,7 @@ export function Shell() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const groups = useMemo(() => navGroupsFor(cargoTipo), [cargoTipo]);
-  const coverOnTop = pathname === '/visao-geral' && !ehCargoConstrutora(cargoTipo);
+  const coverOnTop = pathname === '/visao-geral';
   const [openGroups, setOpenGroups] = useState({ empreendimento: true });
   const [playToken, setPlayToken] = useState({ id: '', token: 0 });
   const [navOpen, setNavOpen] = useState(false);
@@ -213,11 +213,18 @@ export function Shell() {
               onToggle={() => toggleGroup(group.id)}
             />
           ))}
-          {isGestaoTecnica ? (
-            <button type="button" className="side-nav-action" onClick={() => navigate('/suporte')}>
+          {!isConstrutoraOrg ? (
+            <NavLink
+              to={isGestaoTecnica
+                ? `/suporte${condoId ? `?condo=${condoId}` : ''}`
+                : String(cargoTipo || '').toLowerCase() === 'morador'
+                  ? '/assistencia-tecnica'
+                  : '/chamados'}
+              className="side-nav-action"
+            >
               <Icon name="headset" size={18} />
               Suporte
-            </button>
+            </NavLink>
           ) : null}
         </nav>
         {isGestaoTecnica || isConstrutoraOrg ? (

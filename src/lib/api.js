@@ -235,16 +235,6 @@ async function popularCondominioCliente(condoId, seed, userId, fornecedorLogos) 
     seed.assistencia_tecnica
       ? insertRows('visao_geral_secoes', [{ condominio_id: condoId, titulo: 'Assistência técnica', texto: seed.assistencia_tecnica, ordem: 1 }])
       : null,
-    seed.boletim_titulo && seed.boletim_texto
-      ? insertRows('boletins_informativos', [{
-        condominio_id: condoId,
-        autor_id: userId,
-        titulo: seed.boletim_titulo,
-        texto: seed.boletim_texto,
-        publicado: true,
-        data_publicacao: new Date().toISOString(),
-      }])
-      : null,
     seed.email
       ? insertRows('contatos', [{ condominio_id: condoId, nome: 'Condomínio', email: seed.email, ordem: 0, ativo: true }])
       : null,

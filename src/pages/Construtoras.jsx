@@ -732,7 +732,7 @@ export function ConstrutoraPortal() {
 
   function entrar(id) {
     selectCondo(id);
-    navigate(`/construtora/${id}`);
+    navigate('/visao-geral');
   }
 
   return (

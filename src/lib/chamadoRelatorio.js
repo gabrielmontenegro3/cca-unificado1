@@ -1,9 +1,11 @@
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
+import ccaLogoUrl from '../assets/logo cca collor (1).png';
 import { chamadoNumero, formatDateTime, labelUnidade } from './format';
 import { tipoLabelEvento, tituloRastreabilidade } from './chamadoRastreabilidade';
 import { STATUS_LABEL } from './permissions';
 import { arquivoEhImagem, publicOrSignedUrl } from './api';
+import { loadBranding } from './branding';
 
 function esc(text) {
   return String(text || '')
@@ -29,6 +31,18 @@ function blobToDataUrl(blob) {
     reader.onerror = () => reject(new Error('Falha ao ler a imagem.'));
     reader.readAsDataURL(blob);
   });
+}
+
+export async function urlParaDataUrl(url) {
+  if (!url) return '';
+  if (String(url).startsWith('data:')) return url;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return '';
+    return await blobToDataUrl(await res.blob());
+  } catch {
+    return '';
+  }
 }
 
 async function arquivoComDataUrl(arquivo) {
@@ -76,13 +90,21 @@ function galleryHtml(arquivos) {
   return `<div class="gallery">${figs}</div>`;
 }
 
-function cardHtml(item, inspecoes) {
+function cardHtml(item, inspecoes, apontamentos) {
   const titulo = esc(item.titulo || tituloRastreabilidade(item));
   const quem = item.registrado?.nome || item.usuarios?.nome;
   const parent = item.parent_id
     ? inspecoes.find((i) => i.id === item.parent_id)
     : null;
-  const children = (item.children || []).map((child) => cardHtml(child, inspecoes)).join('');
+  const vinculados = item.tipo === 'inspecao'
+    ? (apontamentos || []).filter((a) => a.parent_id === item.id)
+    : [];
+  const links = [
+    parent
+      ? `Vinculado à ${parent.numero_inspecao}ª inspeção · ${formatDateTime(parent.data_ocorrencia || parent.created_at)}`
+      : null,
+    ...vinculados.map((ap) => `Diagnóstico · ${formatDateTime(ap.data_ocorrencia || ap.created_at)}`),
+  ].filter(Boolean);
   return `
     <article class="card tipo-${esc(item.tipo || item.kind || '')}">
       <header class="card-head">
@@ -91,12 +113,11 @@ function cardHtml(item, inspecoes) {
       </header>
       <h3>${titulo}</h3>
       ${quem ? `<p class="meta">Por ${esc(quem)}</p>` : ''}
-      ${parent ? `<p class="meta">Vinculado à ${esc(String(parent.numero_inspecao))}ª inspeção</p>` : ''}
+      ${links.map((text) => `<p class="meta">${esc(text)}</p>`).join('')}
       ${item.observacao ? `<p class="text">${esc(item.observacao).replace(/\n/g, '<br>')}</p>` : ''}
       ${item.descricao ? `<p class="text">${esc(item.descricao).replace(/\n/g, '<br>')}</p>` : ''}
       ${item.atendentes?.length ? `<p class="meta">Atendentes: ${esc(item.atendentes.map((a) => a.nome).join(', '))}</p>` : ''}
       ${galleryHtml(item.arquivos)}
-      ${children ? `<div class="children">${children}</div>` : ''}
     </article>
   `;
 }
@@ -233,23 +254,79 @@ function reportCss() {
     }
     .children .card { background: #f7f3ec; }
     .foot { margin: 8px 0 0; color: #6d6458; font-size: 11px; }
+    .logos {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 28px;
+      margin: 0 auto 18px;
+      min-height: 84px;
+    }
+    .logo {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+      width: auto;
+      height: 84px;
+    }
+    .logo img {
+      height: 76px;
+      width: auto;
+      max-width: 220px;
+      object-fit: contain;
+      object-position: center;
+      display: block;
+    }
+    .logos-bar {
+      position: relative;
+      width: 1px;
+      height: 68px;
+      flex: 0 0 1px;
+      background: linear-gradient(
+        180deg,
+        transparent 0%,
+        rgba(29, 25, 21, 0.18) 12%,
+        rgba(29, 25, 21, 0.62) 50%,
+        rgba(29, 25, 21, 0.18) 88%,
+        transparent 100%
+      );
+    }
+    .logos-bar-gold {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 1px;
+      height: 28px;
+      transform: translate(-50%, -50%);
+      background: linear-gradient(180deg, #c4a574, #8d6b3e 50%, #c4a574);
+    }
   `;
 }
 
-function reportHtml({ chamado, timeline, inspecoes }) {
+function logosHtml(condoLogo, ccaLogo) {
+  const condo = condoLogo
+    ? `<div class="logo"><img src="${condoLogo}" alt="" /></div><span class="logos-bar"><span class="logos-bar-gold"></span></span>`
+    : '';
+  const cca = ccaLogo ? `<div class="logo"><img src="${ccaLogo}" alt="CCA" /></div>` : '';
+  return `<div class="logos">${condo}${cca}</div>`;
+}
+
+function reportHtml({ chamado, timeline, inspecoes, condoLogo, ccaLogo }) {
   const numero = chamadoNumero(chamado?.numero_registro);
+  const apontamentos = (timeline || []).filter((item) => item.tipo === 'apontamento');
   const cards = (timeline || []).map((item, index) => `
     <li class="item">
       <span class="dot"></span>
       ${index < timeline.length - 1 ? '<span class="line"></span>' : ''}
-      ${cardHtml(item, inspecoes)}
+      ${cardHtml(item, inspecoes, apontamentos)}
     </li>
   `).join('');
 
   return `
-    <div class="sheet">
+      <div class="sheet">
       <style>${reportCss()}</style>
-      <p class="brand">CCA · Relatório</p>
+      ${logosHtml(condoLogo, ccaLogo)}
       <h1>Rastreabilidade</h1>
       <p class="lead">${esc(numero)} · ${esc(chamado?.titulo || 'Chamado')}</p>
       <section class="summary">
@@ -266,6 +343,24 @@ function reportHtml({ chamado, timeline, inspecoes }) {
       <p class="foot">Gerado em ${esc(formatDateTime(new Date().toISOString()))}</p>
     </div>
   `;
+}
+
+/** html2canvas ignora object-fit e achata a logo quando largura e altura estão fixas. */
+export function preservarProporcaoImagens(root, selector) {
+  if (!root) return;
+  const altura = 76;
+  const larguraMax = 220;
+  for (const img of root.querySelectorAll(selector)) {
+    const naturalW = img.naturalWidth;
+    const naturalH = img.naturalHeight;
+    if (!naturalW || !naturalH) continue;
+    const width = Math.min(larguraMax, Math.round((naturalW / naturalH) * altura));
+    const height = Math.max(1, Math.round((naturalH / naturalW) * width));
+    img.style.width = `${width}px`;
+    img.style.height = `${height}px`;
+    img.style.maxWidth = 'none';
+    img.style.maxHeight = 'none';
+  }
 }
 
 export function waitImages(root) {
@@ -291,7 +386,49 @@ export function downloadPdf(pdf, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 1500);
 }
 
+function tamanhoImagem(image) {
+  return {
+    width: image?.width || image?.naturalWidth || 0,
+    height: image?.height || image?.naturalHeight || 0,
+  };
+}
+
+/** html2canvas chama createPattern com um canvas 0×0 quando um fundo não tem tamanho. */
+function protegerCreatePattern(view = window) {
+  const proto = view.CanvasRenderingContext2D?.prototype;
+  if (!proto?.createPattern) return () => {};
+  const original = proto.createPattern;
+  proto.createPattern = function (image, repetition) {
+    const { width, height } = tamanhoImagem(image);
+    if (width > 0 && height > 0) return original.call(this, image, repetition);
+    const blank = view.document.createElement('canvas');
+    blank.width = 1;
+    blank.height = 1;
+    return original.call(this, blank, repetition || 'repeat');
+  };
+  return () => {
+    proto.createPattern = original;
+  };
+}
+
+export async function renderizarParaCanvas(element, options) {
+  if (!element) throw new Error('Nada para exportar.');
+  const restaurar = protegerCreatePattern(element.ownerDocument?.defaultView || window);
+  try {
+    const canvas = await html2canvas(element, options);
+    if (!canvas?.width || !canvas?.height) {
+      throw new Error('Não foi possível montar a imagem do PDF.');
+    }
+    return canvas;
+  } finally {
+    restaurar();
+  }
+}
+
 export function canvasToPdf(canvas) {
+  if (!canvas?.width || !canvas?.height) {
+    throw new Error('Não foi possível montar a imagem do PDF.');
+  }
   const pdf = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4', compress: true });
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
@@ -301,9 +438,10 @@ export function canvasToPdf(canvas) {
   let page = 0;
   while (y < canvas.height) {
     const sliceHeight = Math.min(pageHeightPx, canvas.height - y);
+    if (sliceHeight <= 0) break;
     const pageCanvas = document.createElement('canvas');
     pageCanvas.width = canvas.width;
-    pageCanvas.height = Math.ceil(sliceHeight);
+    pageCanvas.height = Math.max(1, Math.ceil(sliceHeight));
     const ctx = pageCanvas.getContext('2d');
     ctx.fillStyle = '#f3eee6';
     ctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
@@ -318,34 +456,47 @@ export function canvasToPdf(canvas) {
   return pdf;
 }
 
-export async function exportarRelatorioChamado({
+export async function montarHtmlRelatorioChamado({
   chamado,
   timeline = [],
   inspecoes = [],
+  condominioId,
 }) {
-  const embedded = await Promise.all((timeline || []).map(embedItem));
-  const host = document.createElement('div');
-  host.setAttribute('aria-hidden', 'true');
-  host.style.cssText = 'position:fixed;left:-10000px;top:0;width:794px;background:#f3eee6;z-index:-1;';
-  host.innerHTML = reportHtml({
+  const [embedded, condoLogo, ccaLogo] = await Promise.all([
+    Promise.all((timeline || []).map(embedItem)),
+    loadBranding(condominioId).then((brand) => urlParaDataUrl(brand?.logo)).catch(() => ''),
+    urlParaDataUrl(ccaLogoUrl),
+  ]);
+  return reportHtml({
     chamado,
     timeline: embedded,
     inspecoes,
+    condoLogo,
+    ccaLogo,
   });
+}
+
+export async function exportarRelatorioChamado(args) {
+  const html = await montarHtmlRelatorioChamado(args);
+  const host = document.createElement('div');
+  host.setAttribute('aria-hidden', 'true');
+  host.style.cssText = 'position:fixed;left:-10000px;top:0;width:794px;background:#f3eee6;z-index:-1;';
+  host.innerHTML = html;
   document.body.appendChild(host);
 
   try {
     if (document.fonts?.ready) await document.fonts.ready;
     await waitImages(host);
     const sheet = host.querySelector('.sheet');
-    const canvas = await html2canvas(sheet, {
+    preservarProporcaoImagens(sheet, '.logo img');
+    const canvas = await renderizarParaCanvas(sheet, {
       scale: 2,
       useCORS: true,
       backgroundColor: '#f3eee6',
       logging: false,
       windowWidth: 794,
     });
-    const numero = slugArquivo(chamadoNumero(chamado?.numero_registro).replace('ID: ', 'ID-'));
+    const numero = slugArquivo(chamadoNumero(args.chamado?.numero_registro).replace('ID: ', 'ID-'));
     const filename = `rastreabilidade-${numero}.pdf`;
     const pdf = canvasToPdf(canvas);
     downloadPdf(pdf, filename);

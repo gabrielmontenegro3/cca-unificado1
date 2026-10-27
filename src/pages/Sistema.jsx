@@ -194,7 +194,7 @@ export function NotificacoesPage() {
   const body = (
     <Page
       title="Notificações"
-      lead="Avisos de conversas, boletins e mudanças nos seus chamados."
+      lead="Avisos de conversas e mudanças nos seus chamados."
       actions={naoLidas ? (
         <Btn variant="ghost" disabled={busy} onClick={marcarTodas}>Marcar todas como lidas</Btn>
       ) : null}

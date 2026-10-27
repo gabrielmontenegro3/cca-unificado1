@@ -151,7 +151,8 @@ export function can(tipo, action) {
     create_laudo: t === 'gestao_tecnica',
     view_laudos: t !== 'morador',
     chat_laudo: t === 'gestao_tecnica' || t === 'construtora',
-    view_all_tickets: isGestao(t),
+    view_all_tickets: isGestao(t) || t === 'construtora',
+    reply_ticket: isGestao(t) || t === 'morador' || t === 'administracao',
     view_admin_tickets: t === 'administracao',
     create_ticket: t === 'morador' || t === 'administracao',
     view_maintenance: isStaff(t) || isGestao(t) || t === 'construtora',
@@ -175,20 +176,40 @@ export function navGroupsFor(tipo) {
   if (isConstrutora) {
     return [
       {
+        id: 'empreendimento',
+        label: 'Empreendimento',
+        icon: 'building',
+        items: [
+          { to: '/visao-geral', label: 'Visão geral', icon: 'home' },
+          { to: '/documentos', label: 'Documentos', icon: 'folder' },
+          { to: '/meu-imovel', label: 'Meu imóvel', icon: 'door' },
+        ],
+      },
+      {
+        id: 'manutencao',
+        label: 'Manutenção',
+        icon: 'wrench',
+        items: [
+          { to: '/manutencao', label: 'Manutenções', icon: 'wrench' },
+          { to: '/chamados', label: 'Chamados', icon: 'message' },
+        ],
+      },
+      {
+        id: 'materiais',
+        label: 'Materiais',
+        icon: 'layers',
+        items: [
+          { to: '/fornecedores', label: 'Fornecedores', icon: 'box' },
+          { to: '/materiais', label: 'Materiais', icon: 'layers' },
+          { to: '/locais', label: 'Locais', icon: 'map' },
+        ],
+      },
+      {
         id: 'governanca',
         label: 'Governança',
         icon: 'clipboard',
         items: [
           { to: '/governanca-tecnica', label: 'Governança técnica', icon: 'clipboard' },
-        ],
-      },
-      {
-        id: 'operacao',
-        label: 'Operação',
-        icon: 'home',
-        items: [
-          { to: '/visao-geral', label: 'Números dos chamados', icon: 'home' },
-          { to: '/manutencao', label: 'Manutenções', icon: 'wrench' },
         ],
       },
     ];
@@ -214,7 +235,6 @@ export function navGroupsFor(tipo) {
       items: [
         { to: '/manutencao', label: 'Manutenções', icon: 'wrench' },
         ...(isGT ? [{ to: '/chamados', label: 'Chamados', icon: 'message' }] : []),
-        ...(isGT ? [{ to: '/suporte', label: 'Suporte global', icon: 'headset' }] : []),
         ...(isGT ? [{ to: '/rastreabilidade', label: 'Rastreabilidade', icon: 'layers' }] : []),
         ...(isGT ? [{ to: '/agendar-visita', label: 'Agendar visita', icon: 'calendar' }] : []),
         ...(isGT ? [{ to: '/relatorio', label: 'Relatório', icon: 'file' }] : []),

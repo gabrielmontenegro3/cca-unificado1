@@ -1,4 +1,3 @@
-import html2canvas from 'html2canvas';
 import { formatDate, labelUnidade } from './format';
 import { ehChamadoAdministracao, ehUnidadeAreasComuns } from './permissions';
 import { buildTimeline, eventoEhInspecaoAgendada } from './chamadoRastreabilidade';
@@ -8,7 +7,7 @@ import {
   listarRastreabilidadeChamados,
   periodoPadraoChamados,
 } from './api';
-import { canvasToPdf, downloadPdf, waitImages } from './chamadoRelatorio';
+import { canvasToPdf, downloadPdf, preservarProporcaoImagens, renderizarParaCanvas, waitImages } from './chamadoRelatorio';
 
 export const ESCOPO_RELATORIO = {
   todos: 'Todos',
@@ -195,7 +194,8 @@ export async function exportarFolhaPdf(element, filename) {
   if (!element) throw new Error('Visualize o relatório antes de baixar.');
   if (document.fonts?.ready) await document.fonts.ready;
   await waitImages(element);
-  const canvas = await html2canvas(element, {
+  preservarProporcaoImagens(element, '.report-logo');
+  const canvas = await renderizarParaCanvas(element, {
     scale: 2,
     useCORS: true,
     backgroundColor: '#f3eee6',

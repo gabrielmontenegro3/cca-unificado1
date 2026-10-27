@@ -36,17 +36,26 @@ function HomeRedirect() {
 }
 
 function VisaoGeralRoute() {
-  const { cargoTipo } = useSession();
-  if (ehCargoConstrutora(cargoTipo)) {
-    return (
-      <SecoesPage
-        table="visao_geral_secoes"
-        title="Números dos chamados"
-        lead="Totais de chamados, manutenções e laudos do condomínio."
-      />
-    );
-  }
   return <SecoesPage table="visao_geral_secoes" title="Visão geral" cover="visao" hero />;
+}
+
+function rotaSistemaCondominio(pathname) {
+  if (pathname === '/chamados/novo' || pathname.startsWith('/chamados/novo/')) return false;
+  const prefixos = [
+    '/visao-geral',
+    '/documentos',
+    '/boletins',
+    '/contatos',
+    '/meu-imovel',
+    '/sobre-nos',
+    '/manutencao',
+    '/fornecedores',
+    '/materiais',
+    '/locais',
+    '/garantias',
+    '/chamados',
+  ];
+  return prefixos.some((rota) => pathname === rota || pathname.startsWith(`${rota}/`));
 }
 
 function Guard({ children }) {
@@ -106,14 +115,14 @@ function Guard({ children }) {
       || pathname.startsWith('/condominios')
       || pathname.startsWith('/configuracoes')
       || pathname.startsWith('/notificacoes')
+      || rotaSistemaCondominio(pathname)
     ) : (
       pathname === '/'
       || pathname === '/painel'
       || pathname.startsWith('/governanca-tecnica')
-      || pathname.startsWith('/visao-geral')
-      || pathname.startsWith('/manutencao')
       || pathname.startsWith('/configuracoes')
       || pathname.startsWith('/notificacoes')
+      || rotaSistemaCondominio(pathname)
     );
     if (!permitida) {
       return <Navigate to={isConstrutoraOrg ? '/' : '/governanca-tecnica'} replace />;

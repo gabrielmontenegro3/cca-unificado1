@@ -253,30 +253,12 @@ export function buildTimeline(chamado, fotosAbertura, registros, historico) {
     });
   }
 
-  const inspecoes = (registros || []).filter((r) => r.tipo === 'inspecao');
-  const apontamentos = (registros || []).filter((r) => r.tipo === 'apontamento');
-
   for (const reg of registros || []) {
-    if (reg.tipo === 'apontamento') continue;
-    const children = reg.tipo === 'inspecao'
-      ? apontamentos.filter((a) => a.parent_id === reg.id)
-      : [];
     items.push({
       ...reg,
       kind: 'registro',
       when: reg.data_ocorrencia || reg.created_at,
-      children,
     });
-  }
-
-  for (const ap of apontamentos) {
-    if (!ap.parent_id || !inspecoes.some((i) => i.id === ap.parent_id)) {
-      items.push({
-        ...ap,
-        kind: 'registro',
-        when: ap.data_ocorrencia || ap.created_at,
-      });
-    }
   }
 
   const abertura = items[0];

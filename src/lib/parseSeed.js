@@ -331,8 +331,6 @@ export function buildCondoSeed(form) {
     sobre_empreendimento: (form.sobre_empreendimento || '').trim(),
     sobre_nos: (form.sobre_nos || '').trim(),
     assistencia_tecnica: (form.assistencia_tecnica || '').trim(),
-    boletim_titulo: (form.boletim_titulo || '').trim(),
-    boletim_texto: (form.boletim_texto || '').trim(),
     email: (form.email || '').trim(),
     linhas_base: linhasBase,
     fornecedores,

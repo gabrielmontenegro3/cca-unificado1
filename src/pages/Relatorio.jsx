@@ -4,6 +4,7 @@ import { useSession } from '../lib/session';
 import { can, STATUS_LABEL } from '../lib/permissions';
 import { chamadoNumero, formatDate } from '../lib/format';
 import { APP_LOGO, Alert, Btn, Empty, Field, Page } from '../components/ui';
+import { urlParaDataUrl } from '../lib/chamadoRelatorio';
 import { tipoLabelEvento, tituloRastreabilidade, eventoEhInspecaoAgendada } from '../lib/chamadoRastreabilidade';
 import {
   ESCOPO_RELATORIO,
@@ -64,7 +65,7 @@ function ReportCard({ item, inspecoes }) {
 }
 
 export function RelatorioPage() {
-  const { condoId, cargoTipo, condo } = useSession();
+  const { condoId, cargoTipo, condo, branding } = useSession();
   const podeAcessar = can(cargoTipo, 'manage_traceability');
   const sheetRef = useRef(null);
   const [inicio, setInicio] = useState('');
@@ -77,6 +78,15 @@ export function RelatorioPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [condoLogo, setCondoLogo] = useState('');
+
+  useEffect(() => {
+    let live = true;
+    urlParaDataUrl(branding?.logo)
+      .then((url) => { if (live) setCondoLogo(url || branding?.logo || ''); })
+      .catch(() => { if (live) setCondoLogo(branding?.logo || ''); });
+    return () => { live = false; };
+  }, [branding?.logo]);
 
   useEffect(() => {
     if (!condoId || !podeAcessar) return;
@@ -235,7 +245,11 @@ export function RelatorioPage() {
             <p className="report-dirty">Os filtros mudaram. Clique em Visualizar para atualizar a prévia.</p>
           ) : null}
           <article className="report-sheet" ref={sheetRef}>
-            <img className="report-logo" src={APP_LOGO} alt="CCA" />
+            <div className="report-logos">
+              {condoLogo ? <img className="report-logo" src={condoLogo} alt={condo?.nome || 'Condomínio'} /> : null}
+              {condoLogo ? <span className="report-logos-bar" aria-hidden="true" /> : null}
+              <img className="report-logo" src={APP_LOGO} alt="CCA" />
+            </div>
             <p className="report-period-line">{report.periodoLabel}</p>
             <h1>Relatório de ocorrências</h1>
             <p className="report-condo">{report.condoNome || 'Condomínio'}</p>

@@ -39,8 +39,6 @@ const EMPTY_FORM = {
   bairro: '',
   cidade: '',
   estado: '',
-  boletim_titulo: '',
-  boletim_texto: '',
   catalogo_texto: '',
   fornecedores_texto: '',
   materiais_texto: '',
@@ -664,15 +662,6 @@ export function CondominiosPortal() {
                   <input value={form.estado} onChange={(e) => setField('estado', e.target.value)} />
                 </Field>
               </div>
-            </Section>
-
-            <Section title="Boletim informativo">
-              <Field label="Título">
-                <input value={form.boletim_titulo} onChange={(e) => setField('boletim_titulo', e.target.value)} />
-              </Field>
-              <Field label="Texto">
-                <textarea value={form.boletim_texto} onChange={(e) => setField('boletim_texto', e.target.value)} />
-              </Field>
             </Section>
 
             <Section

@@ -117,7 +117,7 @@ export const NOTIF_TIPO_LABEL = {
 export async function destinoNotificacao(row, { selectCondo, navigate, isGestaoTecnica }) {
   if (row.tipo === 'boletim') {
     if (row.condominio_id) selectCondo(row.condominio_id);
-    navigate('/boletins');
+    navigate('/visao-geral');
     return;
   }
   if (row.tipo === 'status_chamado' && row.ref_id) {

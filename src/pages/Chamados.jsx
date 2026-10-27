@@ -59,6 +59,7 @@ function ChamadosInbox() {
   const canLaudo = can(cargoTipo, 'create_laudo');
   const podeAgendar = can(cargoTipo, 'manage_traceability');
   const podeEspecificar = cargoTipo === 'gestao_tecnica';
+  const podeResponder = can(cargoTipo, 'reply_ticket');
 
   async function loadLista() {
     if (!condoId) return;
@@ -352,13 +353,17 @@ function ChamadosInbox() {
                   empty="Nenhuma mensagem ainda."
                 />
               </div>
-              <ChatComposer
-                value={texto}
-                onChange={setTexto}
-                sending={sending}
-                onSend={send}
-                onFile={sendFile}
-              />
+              {podeResponder ? (
+                <ChatComposer
+                  value={texto}
+                  onChange={setTexto}
+                  sending={sending}
+                  onSend={send}
+                  onFile={sendFile}
+                />
+              ) : (
+                <p className="hint chat-readonly">Somente visualização</p>
+              )}
             </>
           )}
         </section>

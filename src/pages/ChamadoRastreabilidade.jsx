@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useSession } from '../lib/session';
@@ -24,10 +24,24 @@ import {
   tiposRastreabilidadePermitidos,
   tituloRastreabilidade,
 } from '../lib/chamadoRastreabilidade';
-import { exportarRelatorioChamado } from '../lib/chamadoRelatorio';
+import { exportarRelatorioChamado, montarHtmlRelatorioChamado } from '../lib/chamadoRelatorio';
 import { Alert, Badge, Btn, ChamadoAdminBanner, ChamadoAdminTag, Empty, Field, Page } from '../components/ui';
 import { Icon } from '../components/icons';
 import { Modal } from '../components/DataList';
+
+function FolhaRelatorio({ html }) {
+  const hostRef = useRef(null);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host || !html) return undefined;
+    const shadow = host.shadowRoot || host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = html;
+    return undefined;
+  }, [html]);
+
+  return <div className="rpdf-host" ref={hostRef} />;
+}
 
 function TraceGallery({ arquivos }) {
   const [items, setItems] = useState(arquivos || []);
@@ -81,13 +95,39 @@ function TraceGallery({ arquivos }) {
   );
 }
 
-function TraceEventCard({ item, inspecoes }) {
+function TraceLinks({ item, inspecoes, apontamentos }) {
+  const parent = item.parent_id
+    ? inspecoes.find((i) => i.id === item.parent_id)
+    : null;
+  const vinculados = item.tipo === 'inspecao'
+    ? (apontamentos || []).filter((a) => a.parent_id === item.id)
+    : [];
+  if (!parent && !vinculados.length) return null;
+
+  return (
+    <div className="trace-links">
+      {parent ? (
+        <span className="trace-link">
+          <Icon name="link" size={13} />
+          <span>{parent.numero_inspecao}ª inspeção</span>
+          <time>{formatDateTime(parent.data_ocorrencia || parent.created_at)}</time>
+        </span>
+      ) : null}
+      {vinculados.map((ap) => (
+        <span key={ap.id} className="trace-link">
+          <Icon name="link" size={13} />
+          <span>Diagnóstico</span>
+          <time>{formatDateTime(ap.data_ocorrencia || ap.created_at)}</time>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function TraceEventCard({ item, inspecoes, apontamentos }) {
   const titulo = item.titulo || tituloRastreabilidade(item);
   const tipoLabel = tipoLabelEvento(item);
   const quem = item.registrado?.nome || item.usuarios?.nome;
-  const parentInspecao = item.parent_id
-    ? inspecoes.find((i) => i.id === item.parent_id)
-    : null;
 
   return (
     <article className={`trace-card trace-card--${item.tipo || item.kind}`}>
@@ -97,11 +137,7 @@ function TraceEventCard({ item, inspecoes }) {
       </header>
       <h3 className="trace-card-title">{titulo}</h3>
       {quem ? <p className="trace-card-meta">Por {quem}</p> : null}
-      {parentInspecao ? (
-        <p className="trace-card-meta">
-          Vinculado à {parentInspecao.numero_inspecao}ª inspeção
-        </p>
-      ) : null}
+      <TraceLinks item={item} inspecoes={inspecoes} apontamentos={apontamentos} />
       {item.observacao ? <p className="trace-card-text">{item.observacao}</p> : null}
       {item.descricao ? <p className="trace-card-text">{item.descricao}</p> : null}
       {item.atendentes?.length ? (
@@ -110,13 +146,6 @@ function TraceEventCard({ item, inspecoes }) {
         </p>
       ) : null}
       <TraceGallery arquivos={item.arquivos} />
-      {item.children?.length ? (
-        <div className="trace-children">
-          {item.children.map((child) => (
-            <TraceEventCard key={child.id} item={child} inspecoes={inspecoes} />
-          ))}
-        </div>
-      ) : null}
     </article>
   );
 }
@@ -372,11 +401,15 @@ export function ChamadoRastreabilidadePage() {
   const [busy, setBusy] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
+  const [folhaAberta, setFolhaAberta] = useState(false);
+  const [folhaHtml, setFolhaHtml] = useState('');
+  const [folhaCarregando, setFolhaCarregando] = useState(false);
   const podeAcessar = can(cargoTipo, 'manage_traceability');
 
   const tipos = tiposRastreabilidadePermitidos(cargoTipo);
   const podeRegistrar = tipos.length > 0;
   const inspecoes = registros.filter((r) => r.tipo === 'inspecao');
+  const apontamentos = registros.filter((r) => r.tipo === 'apontamento');
   const staffAtendimento = staff.filter((u) => {
     const t = String(u.cargoTipo || u.cargos?.tipo || '').toLowerCase();
     return t && t !== 'morador';
@@ -468,6 +501,26 @@ export function ChamadoRastreabilidadePage() {
     }
   }
 
+  async function verRelatorio() {
+    setFolhaAberta(true);
+    setFolhaCarregando(true);
+    setError('');
+    try {
+      const html = await montarHtmlRelatorioChamado({
+        chamado,
+        timeline,
+        inspecoes,
+        condominioId,
+      });
+      setFolhaHtml(html);
+    } catch (err) {
+      setFolhaAberta(false);
+      setError(err.message || 'Não foi possível abrir o relatório.');
+    } finally {
+      setFolhaCarregando(false);
+    }
+  }
+
   async function onExportPdf() {
     setExporting(true);
     setError('');
@@ -476,6 +529,7 @@ export function ChamadoRastreabilidadePage() {
         chamado,
         timeline,
         inspecoes,
+        condominioId,
       });
     } catch (err) {
       setError(err.message || 'Não foi possível gerar o PDF.');
@@ -502,8 +556,11 @@ export function ChamadoRastreabilidadePage() {
           <Btn variant="ghost" to={`/agendar-visita?chamado=${id}`} icon="calendar">Agendar visita</Btn>
           <Btn variant="ghost" to="/rastreabilidade" icon="layers">Chamados</Btn>
           <Btn variant="ghost" to={`/chamados/${id}`} icon="message">Chat</Btn>
-          <Btn variant="ghost" onClick={onExportPdf} icon="file" disabled={exporting}>
-            {exporting ? 'Gerando PDF…' : 'Exportar PDF'}
+          <Btn variant="ghost" onClick={verRelatorio} icon="file" disabled={folhaCarregando}>
+            {folhaCarregando ? 'Abrindo…' : 'Ver relatório'}
+          </Btn>
+          <Btn variant="ghost" onClick={onExportPdf} icon="download" disabled={exporting}>
+            {exporting ? 'Gerando PDF…' : 'Baixar PDF'}
           </Btn>
         </div>
       }
@@ -544,7 +601,7 @@ export function ChamadoRastreabilidadePage() {
             <li key={item.id} className="trace-timeline-item">
               <span className="trace-timeline-dot" aria-hidden="true" />
               {index < timeline.length - 1 ? <span className="trace-timeline-line" aria-hidden="true" /> : null}
-              <TraceEventCard item={item} inspecoes={inspecoes} />
+              <TraceEventCard item={item} inspecoes={inspecoes} apontamentos={apontamentos} />
             </li>
           ))}
         </ol>
@@ -558,6 +615,24 @@ export function ChamadoRastreabilidadePage() {
           <p className="hint">Inspeção, atendimento, repasse, comunicação e outros registros entram na linha do tempo.</p>
         </div>
       ) : null}
+
+      <Modal
+        open={folhaAberta}
+        title="Relatório"
+        onClose={() => setFolhaAberta(false)}
+        className="modal-sheet--relatorio"
+        footer={(
+          <Btn icon="download" onClick={onExportPdf} disabled={exporting || folhaCarregando}>
+            {exporting ? 'Gerando PDF…' : 'Baixar PDF'}
+          </Btn>
+        )}
+      >
+        {folhaCarregando ? (
+          <p className="hint">Montando o relatório…</p>
+        ) : (
+          <FolhaRelatorio html={folhaHtml} />
+        )}
+      </Modal>
 
       <RegistrarModal
         open={modalOpen}
