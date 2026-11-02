@@ -24,6 +24,7 @@ import { GestaoTecnicaUsuariosPage } from './pages/GestaoTecnicaUsuarios';
 import { ConfiguracoesPage, NotificacoesPage, OnboardingPreferencias } from './pages/Sistema';
 import { GovernancaTecnicaPage } from './pages/GovernancaTecnica';
 import { MeuImovelPage } from './pages/MeuImovel';
+import { TipoAptoPage } from './pages/TipoApto';
 import { ConfigCondominioPage, ConfigConstrutoraPage } from './pages/ConfiguracaoGeral';
 import { ConstrutoraRelatoriosPage } from './pages/ConstrutoraRelatorios';
 import { ConstrutoraIndicativosPage } from './pages/ConstrutoraIndicativos';
@@ -47,6 +48,7 @@ function rotaSistemaCondominio(pathname) {
     '/boletins',
     '/contatos',
     '/meu-imovel',
+    '/tipo-apto',
     '/sobre-nos',
     '/manutencao',
     '/fornecedores',
@@ -189,6 +191,7 @@ export default function App() {
         <Route path="painel" element={<Navigate to="/visao-geral" replace />} />
         <Route path="visao-geral" element={<VisaoGeralRoute />} />
         <Route path="meu-imovel" element={<MeuImovelPage />} />
+        <Route path="tipo-apto" element={<TipoAptoPage />} />
         <Route path="empreendimento" element={<Navigate to="/visao-geral" replace />} />
         <Route path="sobre-nos" element={<SecoesPage table="sobre_nos" title="Sobre nós" lead="Blocos institucionais." />} />
         <Route path="documentos" element={<DocumentosPage />} />

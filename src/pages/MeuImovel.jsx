@@ -1,68 +1,26 @@
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { Page } from '../components/ui';
-import { Icon } from '../components/icons';
+import { useEffect, useMemo, useState } from 'react';
+import { supabase } from '../lib/supabase';
+import { useSession } from '../lib/session';
+import { arquivoEhImagem, publicOrSignedUrl } from '../lib/api';
+import { fichaPreenchida, textosPreenchidos } from '../lib/tipoApto';
+import { Alert, Btn, Field, Page } from '../components/ui';
+import { EditTelaButton, useEditTela } from '../components/EditTela';
 
-const SECOES = [
-  {
-    id: 'recebimento',
-    titulo: 'Recebimento do Imóvel',
-    blocos: [
-      {
-        tipo: 'p',
-        texto: 'A unidade é entregue ao comprador que estiver com as obrigações financeiras em dia, conforme estabelecido em contrato específico, e mediante vistoria do imóvel, em conjunto com representante da construtora.',
-      },
-      {
-        tipo: 'p',
-        texto: 'Na Vistoria, verifica-se o cumprimento das especificações e a existência de vícios de construção aparentes. Caso sejam verificados defeitos, a construtora irá realizar as devidas reparações para posteriormente ser feita a entrega do imóvel.',
-      },
-      {
-        tipo: 'p',
-        texto: 'O Termo de Entrega de Chaves é assinado no ato do recebimento de sua unidade.',
-      },
-      {
-        tipo: 'dica',
-        texto: 'Se quiser saber mais sobre o que são “vícios de construção aparentes”, clique na lupa acima e procure pelo post “Vícios Ocultos e Aparentes”.',
-        to: '/visao-geral',
-        label: 'Buscar na Visão geral',
-      },
-    ],
-  },
-  {
-    id: 'procedimentos',
-    titulo: 'Procedimentos Iniciais',
-    blocos: [
-      {
-        tipo: 'p',
-        texto: 'Recebendo as chaves do imóvel, o usuário deverá providenciar, junto às concessionárias, as ligações individuais de alguns serviços indispensáveis ao funcionamento de seu conjunto, sendo necessário informar o endereço completo do imóvel, o nome do edifício, telefone para contato, nome completo do usuário, CPF e RG.',
-      },
-      {
-        tipo: 'dica',
-        texto: 'Para identificar sua concessionária de energia e obter orientações sobre como efetuar a ligação, clique na lupa acima e digite “ligação de energia”. Você também encontra esse post em Visão geral, na seção PRIMEIROS PASSOS.',
-        to: '/visao-geral',
-        label: 'Ver primeiros passos',
-      },
-      {
-        tipo: 'p',
-        texto: 'Além disso, caso haja alguma dúvida em relação à utilização das instalações elétricas, hidráulicas, de telefone, de interfone, dimensionamento de peças, especificações de equipamentos, funcionamentos diversos, além dos limites de cargas estruturais, o usuário deverá consultar os respectivos projetos executivos.',
-      },
-      {
-        tipo: 'p',
-        texto: 'Ressaltamos que, na seção de Documentos deste Manual Interativo do Proprietário, constam as principais plantas dos apartamentos, porém, ao síndico serão disponibilizados os principais projetos executivos, de forma completa, os quais deverão estar à disposição para eventuais consultas.',
-      },
-      {
-        tipo: 'p',
-        texto: 'Se mesmo após esta consulta persistirem as dúvidas, orientamos entrar em contato com a Construtora/Incorporadora, para que sejam devidamente suprimidas.',
-      },
-    ],
-  },
-];
-
-function textoSecao(secao) {
-  return secao.blocos.map((b) => b.texto).join(' ');
+function mensagemErro(err) {
+  const msg = String(err?.message || err || '');
+  if (/meu_imovel_secoes|tipo_apartamento_secoes|schema cache|does not exist|42P01/i.test(msg)) {
+    return 'Rode o arquivo supabase/meu-imovel.sql no SQL Editor do Supabase e tente de novo.';
+  }
+  return msg || 'Não foi possível concluir.';
 }
 
-function SecaoGuia({ secao, aberta, onToggle }) {
+async function urlDaPlanta(arquivo) {
+  if (!arquivo?.storage_path || !arquivoEhImagem(arquivo)) return '';
+  const { data } = await publicOrSignedUrl(arquivo.storage_path);
+  return data?.signedUrl || '';
+}
+
+function SecaoGuia({ secao, aberta, onToggle, onExcluir }) {
   return (
     <article className={`meu-imovel-secao${aberta ? ' is-open' : ''}`}>
       <button type="button" className="meu-imovel-secao-toggle" onClick={onToggle} aria-expanded={aberta}>
@@ -71,27 +29,10 @@ function SecaoGuia({ secao, aberta, onToggle }) {
       </button>
       {aberta ? (
         <div className="meu-imovel-secao-body">
-          {secao.blocos.map((bloco) => {
-            if (bloco.tipo === 'dica') {
-              return (
-                <aside key={bloco.texto.slice(0, 40)} className="meu-imovel-dica" role="note">
-                  <span className="meu-imovel-dica-icon" aria-hidden="true">
-                    <Icon name="alert" size={18} />
-                  </span>
-                  <div className="meu-imovel-dica-copy">
-                    <p>{bloco.texto}</p>
-                    {bloco.to ? (
-                      <Link className="meu-imovel-dica-link" to={bloco.to}>
-                        <Icon name="search" size={16} />
-                        <span>{bloco.label}</span>
-                      </Link>
-                    ) : null}
-                  </div>
-                </aside>
-              );
-            }
-            return <p key={bloco.texto.slice(0, 48)}>{bloco.texto}</p>;
-          })}
+          <p>{secao.texto}</p>
+          {onExcluir ? (
+            <Btn type="button" variant="ghost" icon="x" onClick={onExcluir}>Excluir seção</Btn>
+          ) : null}
         </div>
       ) : null}
     </article>
@@ -99,43 +40,228 @@ function SecaoGuia({ secao, aberta, onToggle }) {
 }
 
 export function MeuImovelPage() {
-  const [abertas, setAbertas] = useState(() => Object.fromEntries(SECOES.map((s) => [s.id, true])));
+  const { condoId, session } = useSession();
+  const [secoes, setSecoes] = useState([]);
+  const [tipo, setTipo] = useState(null);
+  const [abertas, setAbertas] = useState({});
   const [q, setQ] = useState('');
+  const [form, setForm] = useState({ titulo: '', texto: '' });
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const { editable, editing, showEditButton, toggleEditing } = useEditTela('manage_content');
+
+  async function load() {
+    if (!condoId) return;
+    setError('');
+    const guia = await supabase
+      .from('meu_imovel_secoes')
+      .select('id, titulo, texto, ordem')
+      .eq('condominio_id', condoId)
+      .order('ordem');
+    if (guia.error) {
+      setError(mensagemErro(guia.error));
+      setSecoes([]);
+    } else {
+      setSecoes(guia.data || []);
+    }
+
+    const userId = session?.user?.id;
+    if (!userId) {
+      setTipo(null);
+      return;
+    }
+    const vinculo = await supabase
+      .from('usuario_condominio')
+      .select('tipo_apartamento_id')
+      .eq('condominio_id', condoId)
+      .eq('usuario_id', userId)
+      .maybeSingle();
+    const tipoId = vinculo.data?.tipo_apartamento_id;
+    if (!tipoId) {
+      setTipo(null);
+      return;
+    }
+    const [tipoRes, secoesRes] = await Promise.all([
+      supabase.from('tipos_apartamento').select('*').eq('id', tipoId).maybeSingle(),
+      supabase.from('tipo_apartamento_secoes').select('id, titulo, texto, ordem').eq('tipo_id', tipoId).order('ordem'),
+    ]);
+    if (tipoRes.error) {
+      setError(mensagemErro(tipoRes.error));
+      setTipo(null);
+      return;
+    }
+    let plantaUrl = '';
+    if (tipoRes.data?.planta_arquivo_id) {
+      const arquivo = await supabase.from('arquivos').select('*').eq('id', tipoRes.data.planta_arquivo_id).maybeSingle();
+      plantaUrl = await urlDaPlanta(arquivo.data);
+    }
+    setTipo({
+      ...(tipoRes.data || {}),
+      plantaUrl,
+      secoes: secoesRes.data || [],
+    });
+  }
+
+  useEffect(() => { load(); }, [condoId, session?.user?.id]);
+
+  const cardsTipo = useMemo(() => (tipo?.secoes || []).map((secao) => ({
+    ...secao,
+    key: `tipo-${secao.id}`,
+  })), [tipo]);
+  const cardsCondo = useMemo(() => secoes.map((secao) => ({
+    ...secao,
+    key: secao.id,
+  })), [secoes]);
 
   const query = q.trim().toLowerCase();
-  const secoes = query
-    ? SECOES.filter((secao) => `${secao.titulo} ${textoSecao(secao)}`.toLowerCase().includes(query))
-    : SECOES;
+  function bate(secao) {
+    return `${secao.titulo} ${secao.texto}`.toLowerCase().includes(query);
+  }
+  const tipoVisivel = tipo && (!query || [
+    tipo.nome,
+    ...fichaPreenchida(tipo).map((item) => `${item.label} ${tipo[item.key]}`),
+    ...textosPreenchidos(tipo).map((item) => tipo[item.key]),
+    ...cardsTipo.map((secao) => `${secao.titulo} ${secao.texto}`),
+  ].join(' ').toLowerCase().includes(query));
+  const secoesTipo = query ? cardsTipo.filter(bate) : cardsTipo;
+  const secoesCondo = query ? cardsCondo.filter(bate) : cardsCondo;
+  const vazio = !tipoVisivel && !secoesTipo.length && !secoesCondo.length;
 
   function toggle(id) {
-    setAbertas((prev) => ({ ...prev, [id]: !prev[id] }));
+    setAbertas((prev) => ({ ...prev, [id]: prev[id] === false }));
   }
+
+  async function criarSecao(e) {
+    e.preventDefault();
+    const titulo = form.titulo.trim();
+    const texto = form.texto.trim();
+    if (!titulo || !texto) {
+      setError('Informe o título e o subtítulo.');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    const { error: err } = await supabase.from('meu_imovel_secoes').insert({
+      condominio_id: condoId,
+      titulo,
+      texto,
+      ordem: secoes.length,
+    });
+    setBusy(false);
+    if (err) {
+      setError(mensagemErro(err));
+      return;
+    }
+    setForm({ titulo: '', texto: '' });
+    load();
+  }
+
+  async function excluirSecao(id) {
+    if (!window.confirm('Excluir esta seção?')) return;
+    setBusy(true);
+    setError('');
+    const { error: err } = await supabase.from('meu_imovel_secoes').delete().eq('id', id);
+    setBusy(false);
+    if (err) {
+      setError(mensagemErro(err));
+      return;
+    }
+    load();
+  }
+
+  const ficha = fichaPreenchida(tipo);
+  const textos = textosPreenchidos(tipo);
 
   return (
     <Page
       title="Meu imóvel"
-      lead="Orientações sobre o recebimento da unidade e os primeiros procedimentos após a entrega das chaves."
+      lead="A planta e a ficha do seu tipo de apartamento, com as orientações deste condomínio."
       className="page-meu-imovel"
+      actions={showEditButton ? <EditTelaButton editing={editing} onToggle={toggleEditing} /> : null}
       search={{
         value: q,
         onChange: setQ,
         placeholder: 'Buscar no Meu imóvel…',
       }}
     >
+      <Alert error={error} />
       <div className="meu-imovel-stack">
-        {!secoes.length ? (
-          <p className="meu-imovel-empty">Nenhum resultado para “{q.trim()}”.</p>
-        ) : (
-          secoes.map((secao) => (
-            <SecaoGuia
-              key={secao.id}
-              secao={secao}
-              aberta={abertas[secao.id] !== false}
-              onToggle={() => toggle(secao.id)}
-            />
-          ))
-        )}
+        {tipoVisivel ? (
+          <article className="meu-imovel-tipo">
+            {tipo.plantaUrl ? (
+              <img className="meu-imovel-planta" src={tipo.plantaUrl} alt={`Planta do tipo ${tipo.nome}`} />
+            ) : null}
+            <header className="meu-imovel-tipo-head">
+              <p>Tipo de apartamento</p>
+              <h2>{tipo.nome}</h2>
+            </header>
+            {ficha.length ? (
+              <dl className="meu-imovel-ficha">
+                {ficha.map((item) => (
+                  <div key={item.key}>
+                    <dt>{item.label}</dt>
+                    <dd>{tipo[item.key]}</dd>
+                  </div>
+                ))}
+              </dl>
+            ) : null}
+            {textos.map((item) => (
+              <div key={item.key} className="meu-imovel-texto">
+                <h3>{item.label}</h3>
+                <p>{tipo[item.key]}</p>
+              </div>
+            ))}
+          </article>
+        ) : null}
+
+        {vazio ? (
+          <p className="meu-imovel-empty">
+            {query ? `Nenhum resultado para “${q.trim()}”.` : 'Nenhuma informação cadastrada ainda.'}
+          </p>
+        ) : null}
+
+        {secoesTipo.map((secao) => (
+          <SecaoGuia
+            key={secao.key}
+            secao={secao}
+            aberta={abertas[secao.key] !== false}
+            onToggle={() => toggle(secao.key)}
+          />
+        ))}
+        {secoesCondo.map((secao) => (
+          <SecaoGuia
+            key={secao.key}
+            secao={secao}
+            aberta={abertas[secao.key] !== false}
+            onToggle={() => toggle(secao.key)}
+            onExcluir={editable ? () => excluirSecao(secao.id) : null}
+          />
+        ))}
       </div>
+
+      {editable ? (
+        <form className="panel stack" onSubmit={criarSecao} style={{ marginTop: 16 }}>
+          <h2>Nova seção deste condomínio</h2>
+          <Field label="Título">
+            <input
+              value={form.titulo}
+              onChange={(e) => setForm({ ...form, titulo: e.target.value })}
+              placeholder="Ex.: Recebimento do imóvel"
+              required
+            />
+          </Field>
+          <Field label="Subtítulo">
+            <textarea
+              value={form.texto}
+              onChange={(e) => setForm({ ...form, texto: e.target.value })}
+              rows={4}
+              placeholder="Texto desta seção"
+              required
+            />
+          </Field>
+          <Btn type="submit" icon="plus" disabled={busy}>{busy ? 'Salvando…' : 'Adicionar seção'}</Btn>
+        </form>
+      ) : null}
     </Page>
   );
 }

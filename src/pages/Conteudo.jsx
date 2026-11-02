@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useSession } from '../lib/session';
+import { documentoVisivelPara } from '../lib/permissions';
 import { uploadArquivo, publicOrSignedUrl } from '../lib/api';
 import { formatDate, formatTelefone } from '../lib/format';
 import { Alert, Btn, Empty, Field, MaskedInput, Page } from '../components/ui';
@@ -27,10 +28,10 @@ function nomeDocumento(row) {
 }
 
 export function DocumentosPage() {
-  const { condoId, session } = useSession();
+  const { condoId, session, cargoTipo } = useSession();
   const [rows, setRows] = useState([]);
   const [q, setQ] = useState('');
-  const [form, setForm] = useState({ titulo: '', descricao: '', file: null });
+  const [form, setForm] = useState({ titulo: '', descricao: '', file: null, publico: '' });
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState('');
   const [dragId, setDragId] = useState('');
@@ -68,6 +69,9 @@ export function DocumentosPage() {
   async function add(e) {
     e.preventDefault();
     if (!form.file) return setError('Selecione um arquivo.');
+    if (form.publico !== 'sindico' && form.publico !== 'morador') {
+      return setError('Marque se o documento é para o síndico ou para o morador.');
+    }
     setError('');
     try {
       const arquivo = await uploadArquivo({
@@ -82,12 +86,18 @@ export function DocumentosPage() {
         titulo: form.titulo || form.file.name,
         descricao: form.descricao,
         ordem: rows.length,
+        publico: form.publico,
       });
       if (err) throw err;
-      setForm({ titulo: '', descricao: '', file: null });
+      setForm({ titulo: '', descricao: '', file: null, publico: '' });
       load();
     } catch (err) {
-      setError(err.message);
+      const msg = String(err.message || '');
+      if (/publico|schema cache|could not find|column/i.test(msg)) {
+        setError('Não foi possível gravar o público do documento. Rode o arquivo supabase/documentos-publico.sql no SQL Editor do Supabase e tente de novo.');
+      } else {
+        setError(msg);
+      }
     }
   }
 
@@ -296,6 +306,7 @@ export function DocumentosPage() {
   }
 
   const filtered = rows.filter((r) => {
+    if (!documentoVisivelPara(r, cargoTipo)) return false;
     const hay = `${nomeDocumento(r)} ${r.descricao || ''} ${r.arquivos?.nome_original || ''}`.toLowerCase();
     return hay.includes(q.toLowerCase());
   });
@@ -351,6 +362,11 @@ export function DocumentosPage() {
                       : 'Documento do empreendimento'}
                   </p>
                 )}
+                {row.publico === 'sindico' || row.publico === 'morador' ? (
+                  <span className={`docs-folder-publico is-${row.publico}`}>
+                    {row.publico === 'sindico' ? 'Síndico' : 'Morador'}
+                  </span>
+                ) : null}
                 <span className="docs-folder-date">
                   {row.created_at ? formatDate(row.created_at) : '—'}
                 </span>
@@ -403,6 +419,26 @@ export function DocumentosPage() {
               onChange={(e) => setForm({ ...form, file: e.target.files?.[0] || null })}
               required
             />
+          </Field>
+          <Field label="Disponível para">
+            <div className="docs-publico" role="group" aria-label="Disponível para">
+              <button
+                type="button"
+                className={form.publico === 'sindico' ? 'is-on' : ''}
+                aria-pressed={form.publico === 'sindico'}
+                onClick={() => setForm({ ...form, publico: 'sindico' })}
+              >
+                Síndico
+              </button>
+              <button
+                type="button"
+                className={form.publico === 'morador' ? 'is-on' : ''}
+                aria-pressed={form.publico === 'morador'}
+                onClick={() => setForm({ ...form, publico: 'morador' })}
+              >
+                Morador
+              </button>
+            </div>
           </Field>
           <Btn type="submit" icon="paperclip">Enviar</Btn>
         </form>

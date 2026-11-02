@@ -66,6 +66,8 @@ const PATHS = {
   washer: ['M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z', 'M4 8h16', 'M12 16a3 3 0 1 0 0-6 3 3 0 0 0 0 6z', 'M6 6h.01', 'M8.5 6h.01'],
   court: ['M4 4h16v16H4z', 'M4 12h16', 'M12 4v16'],
   roof: ['M3 12L12 4l9 8', 'M5 10.5V20h14v-9.5', 'M10 20v-6h4v6'],
+  brush: ['M18.37 2.63L14 7l-1.59-1.59a2 2 0 0 0-2.82 0L8 7l9 9 1.59-1.59a2 2 0 0 0 0-2.82L17 10l4.37-4.37a2.12 2.12 0 1 0-3-3z', 'M9 8c-2 3-4 3.5-7 4l8 10c2-1 6-5 6-5'],
+  snow: ['M12 2v20', 'M4.93 4.93l14.14 14.14', 'M2 12h20', 'M19.07 4.93L4.93 19.07'],
 };
 
 export function Icon({ name, size = 20, className = '' }) {
@@ -109,6 +111,7 @@ export function navIconFor(to, cargoTipo) {
     '/locais': 'map',
     '/garantias': 'shield',
     '/documentos': 'folder',
+    '/tipo-apto': 'layout',
     '/visao-geral': 'home',
     '/usuarios': 'users',
     '/boletins': 'newspaper',

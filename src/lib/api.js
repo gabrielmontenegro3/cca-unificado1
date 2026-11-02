@@ -1965,6 +1965,31 @@ export async function criarConvite({ condominioId, cargo, email, unidadeTexto })
   return data;
 }
 
+function erroTipoApartamento(error) {
+  const msg = String(error?.message || '');
+  if (/definir_tipo_apartamento_usuario|definir_tipo_convite|schema cache|does not exist|PGRST202/i.test(msg)) {
+    return new Error('Rode o arquivo supabase/meu-imovel.sql no SQL Editor do Supabase e tente de novo.');
+  }
+  return error;
+}
+
+export async function definirTipoApartamentoUsuario({ condominioId, usuarioId, tipoId }) {
+  const { error } = await supabase.rpc('definir_tipo_apartamento_usuario', {
+    p_condominio_id: condominioId,
+    p_usuario_id: usuarioId,
+    p_tipo_id: tipoId || null,
+  });
+  if (error) throw erroTipoApartamento(error);
+}
+
+export async function definirTipoConvite({ token, tipoId }) {
+  const { error } = await supabase.rpc('definir_tipo_convite', {
+    p_token: token,
+    p_tipo_id: tipoId || null,
+  });
+  if (error) throw erroTipoApartamento(error);
+}
+
 export async function listarConvites(condominioId) {
   const { data, error } = await supabase.rpc('listar_convites', { p_condominio_id: condominioId });
   if (error) throw error;

@@ -106,6 +106,16 @@ export function ehCargoConstrutora(tipo) {
   return String(tipo || '').toLowerCase().trim() === 'construtora';
 }
 
+/** Documento sem público continua visível. Síndico e morador só veem o que foi marcado para eles. */
+export function documentoVisivelPara(row, cargoTipo) {
+  const publico = row?.publico;
+  if (publico !== 'sindico' && publico !== 'morador') return true;
+  const t = String(cargoTipo || '').toLowerCase().trim();
+  if (t === 'morador') return publico === 'morador';
+  if (t === 'administracao') return publico === 'sindico';
+  return true;
+}
+
 export function nomeUnidadeNormalizado(value) {
   return String(value || '')
     .normalize('NFD')
@@ -183,6 +193,7 @@ export function navGroupsFor(tipo) {
           { to: '/visao-geral', label: 'Visão geral', icon: 'home' },
           { to: '/documentos', label: 'Documentos', icon: 'folder' },
           { to: '/meu-imovel', label: 'Meu imóvel', icon: 'door' },
+          { to: '/tipo-apto', label: 'Tipo Apto', icon: 'layout' },
         ],
       },
       {
@@ -201,6 +212,7 @@ export function navGroupsFor(tipo) {
         items: [
           { to: '/fornecedores', label: 'Fornecedores', icon: 'box' },
           { to: '/materiais', label: 'Materiais', icon: 'layers' },
+          { to: '/garantias', label: 'Garantias', icon: 'shield' },
           { to: '/locais', label: 'Locais', icon: 'map' },
         ],
       },
@@ -225,6 +237,7 @@ export function navGroupsFor(tipo) {
         ...(isAdminCondo ? [{ to: '/chamados', label: 'Chamados', icon: 'headset' }] : []),
         { to: '/documentos', label: 'Documentos', icon: 'folder' },
         { to: '/meu-imovel', label: 'Meu imóvel', icon: 'door' },
+        { to: '/tipo-apto', label: 'Tipo Apto', icon: 'layout' },
         { to: '/boletins', label: 'Boletins informativos', icon: 'newspaper' },
       ],
     },
@@ -248,6 +261,7 @@ export function navGroupsFor(tipo) {
       items: [
         { to: '/fornecedores', label: 'Fornecedores', icon: 'box' },
         { to: '/materiais', label: 'Materiais', icon: 'layers' },
+        { to: '/garantias', label: 'Garantias', icon: 'shield' },
         { to: '/locais', label: 'Locais', icon: 'map' },
       ],
     },

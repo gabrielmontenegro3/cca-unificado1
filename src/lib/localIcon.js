@@ -76,6 +76,30 @@ export function iconForLocal(nome, descricao) {
   return localMeta(nome, descricao).icon;
 }
 
+const SISTEMA_RULES = [
+  { icon: 'shield', keys: ['seguranca', 'alarme', 'cerca eletrica'] },
+  { icon: 'eye', keys: ['cftv', 'camera', 'cameras', 'interfone', 'monitoramento'] },
+  { icon: 'droplet', keys: ['hidraulica', 'hidraulico', 'agua', 'esgoto', 'pluvial', 'bomba', 'reservatorio', 'cisterna', 'caixa d agua', 'barrilete'] },
+  { icon: 'zap', keys: ['eletrica', 'eletrico', 'energia', 'iluminacao', 'quadro eletrico', 'gerador', 'spda', 'para raio', 'medidor'] },
+  { icon: 'roof', keys: ['impermeabilizacao', 'impermeabilizante', 'infiltracao', 'cobertura', 'telhado', 'laje'] },
+  { icon: 'door', keys: ['esquadria', 'esquadrias', 'janela', 'porta', 'portao', 'portoes'] },
+  { icon: 'layers', keys: ['revestimento', 'revestimentos', 'piso', 'ceramica', 'porcelanato', 'azulejo', 'gesso'] },
+  { icon: 'brush', keys: ['pintura', 'pinturas', 'tinta'] },
+  { icon: 'building', keys: ['estrutura', 'estrutural', 'concreto', 'fundacao'] },
+  { icon: 'snow', keys: ['climatizacao', 'ar condicionado', 'hvac', 'ventilacao', 'exaustao', 'split'] },
+  { icon: 'flame', keys: ['incendio', 'extintor', 'hidrante', 'gas', 'glp'] },
+  { icon: 'elevator', keys: ['elevador', 'elevadores', 'monta carga'] },
+];
+
+export function iconForSistema(nome) {
+  const text = fold(nome);
+  const rules = [...SISTEMA_RULES, ...RULES];
+  for (const rule of rules) {
+    if (rule.keys.some((key) => matchesKey(text, key))) return rule.icon;
+  }
+  return 'wrench';
+}
+
 export function tipoForLocal(nome, descricao) {
   return localMeta(nome, descricao).tipo;
 }

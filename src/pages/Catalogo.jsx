@@ -229,6 +229,11 @@ function catalogPayload(table, form, links, { condoId, editing }) {
     }
   }
 
+  if (table === 'garantias') {
+    if (!links?.fornecedorId) throw new Error('Selecione o fornecedor da garantia.');
+    if (!links?.materialId) throw new Error('Selecione o produto da garantia.');
+  }
+
   if (table === 'garantias' || table === 'materiais') {
     if (!blankValue(form.prazo_valor)) {
       const prazo = Number(form.prazo_valor);
@@ -245,9 +250,24 @@ function catalogPayload(table, form, links, { condoId, editing }) {
   return payload;
 }
 
+const LINKS_VAZIOS = { fornecedorId: '', materialId: '', materialIds: [], localIds: [] };
+
 async function linksDoRegistro(table, row) {
-  const vazio = { fornecedorId: '', materialIds: [], localIds: [] };
+  const vazio = { ...LINKS_VAZIOS };
   if (!row?.id) return vazio;
+  if (table === 'garantias') {
+    const [mats, forns] = await Promise.all([
+      supabase.from('material_garantias').select('material_id').eq('garantia_id', row.id),
+      supabase.from('fornecedor_garantias').select('fornecedor_id').eq('garantia_id', row.id),
+    ]);
+    if (mats.error) throw mats.error;
+    if (forns.error) throw forns.error;
+    return {
+      ...vazio,
+      materialId: mats.data?.[0]?.material_id || '',
+      fornecedorId: forns.data?.[0]?.fornecedor_id || '',
+    };
+  }
   if (table === 'materiais') {
     const { data, error } = await supabase.from('material_locais').select('local_id').eq('material_id', row.id);
     if (error) throw error;
@@ -334,6 +354,10 @@ async function excluirRegistroCatalogo(table, id) {
     await apagarOnde('material_locais', 'material_id', id);
     await apagarOnde('material_garantias', 'material_id', id);
   }
+  if (table === 'garantias') {
+    await apagarOnde('material_garantias', 'garantia_id', id);
+    await apagarOnde('fornecedor_garantias', 'garantia_id', id);
+  }
   if (table === 'locais') {
     await apagarOnde('material_locais', 'local_id', id);
     const chamados = await supabase.from('chamados').update({ local_id: null }).eq('local_id', id);
@@ -377,6 +401,26 @@ async function applyCatalogLinks(table, id, links) {
   if (table === 'fornecedores') {
     await syncFornecedorMateriais(id, links.materialIds);
   }
+  if (table === 'garantias') {
+    await definirVinculoGarantia('fornecedor_garantias', id, 'fornecedor_id', links.fornecedorId);
+    await definirVinculoGarantia('material_garantias', id, 'material_id', links.materialId);
+  }
+}
+
+async function definirVinculoGarantia(table, garantiaId, otherCol, otherId) {
+  const { data, error } = await supabase.from(table).select(otherCol).eq('garantia_id', garantiaId);
+  if (error) throw error;
+  const current = (data || []).map((row) => row[otherCol]).filter(Boolean);
+  const wanted = otherId ? [otherId] : [];
+  const remove = current.filter((itemId) => !wanted.includes(itemId));
+  if (remove.length) {
+    const del = await supabase.from(table).delete().eq('garantia_id', garantiaId).in(otherCol, remove);
+    if (del.error) throw del.error;
+  }
+  if (otherId && !current.includes(otherId)) {
+    const ins = await supabase.from(table).insert({ garantia_id: garantiaId, [otherCol]: otherId });
+    if (ins.error && ins.error.code !== '23505') throw ins.error;
+  }
 }
 
 async function persistCatalogRecord({ table, id, form, links, logoFile, condoId, userId }) {
@@ -399,7 +443,7 @@ async function persistCatalogRecord({ table, id, form, links, logoFile, condoId,
 async function loadCatalogOptions(condoId) {
   const [f, m, l] = await Promise.all([
     supabase.from('fornecedores').select('id, nome').eq('condominio_id', condoId).order('nome'),
-    supabase.from('materiais').select('id, nome').eq('condominio_id', condoId).order('nome'),
+    supabase.from('materiais').select('id, nome, fornecedor_id').eq('condominio_id', condoId).order('nome'),
     supabase.from('locais').select('id, nome').eq('condominio_id', condoId).order('nome'),
   ]);
   return {
@@ -413,6 +457,31 @@ function relatedNome(rel) {
   if (!rel) return '';
   const row = Array.isArray(rel) ? rel[0] : rel;
   return row?.nome || '';
+}
+
+async function anexarVinculosGarantia(table, rows) {
+  if (table !== 'garantias' || !(rows || []).length) return rows || [];
+  const ids = rows.map((row) => row.id).filter(Boolean);
+  const [mats, forns] = await Promise.all([
+    supabase.from('material_garantias').select('garantia_id, materiais(id, nome)').in('garantia_id', ids),
+    supabase.from('fornecedor_garantias').select('garantia_id, fornecedores(id, nome)').in('garantia_id', ids),
+  ]);
+  if (mats.error || forns.error) return rows;
+  const produto = {};
+  const fornecedor = {};
+  for (const row of mats.data || []) {
+    const rel = Array.isArray(row.materiais) ? row.materiais[0] : row.materiais;
+    if (rel?.nome) produto[row.garantia_id] = rel.nome;
+  }
+  for (const row of forns.data || []) {
+    const rel = Array.isArray(row.fornecedores) ? row.fornecedores[0] : row.fornecedores;
+    if (rel?.nome) fornecedor[row.garantia_id] = rel.nome;
+  }
+  return rows.map((row) => ({
+    ...row,
+    produtoNome: produto[row.id] || '',
+    fornecedorNome: fornecedor[row.id] || '',
+  }));
 }
 
 async function withLogoUrls(rows) {
@@ -464,9 +533,10 @@ function catalogTags(table, row) {
   if (table === 'garantias') {
     const prazo = formatPrazo(row.prazo_valor, row.prazo_unidade);
     return [
+      row.fornecedorNome ? { key: 'forn', icon: 'box', label: row.fornecedorNome } : null,
+      row.produtoNome ? { key: 'prod', icon: 'layers', label: row.produtoNome } : null,
       prazo ? { key: 'prazo', icon: 'shield', label: prazo } : null,
       row.data_fim ? { key: 'fim', icon: 'calendar', label: `até ${formatDate(row.data_fim)}` } : null,
-      row.telefone ? { key: 'tel', icon: 'phone', label: formatTelefone(row.telefone) || row.telefone } : null,
     ].filter(Boolean);
   }
   return [];
@@ -487,9 +557,7 @@ function listSubtitle(table, row) {
     return AREA_LOCAL[row.area] || '';
   }
   if (table === 'garantias') {
-    const desc = String(row.descricao || '').trim();
-    if (!desc) return '';
-    return desc.length > 72 ? `${desc.slice(0, 72)}…` : desc;
+    return [row.fornecedorNome, row.produtoNome].filter(Boolean).join(' · ');
   }
   return '';
 }
@@ -556,6 +624,22 @@ async function loadRelatedGroups(table, id) {
       .order('nome');
     const mats = matsRes.data || [];
 
+    const gars = await supabase
+      .from('fornecedor_garantias')
+      .select('garantia_id, garantias(id, nome)')
+      .eq('fornecedor_id', id);
+    groups.push({
+      key: 'garantias',
+      label: 'Garantias',
+      items: (gars.error ? [] : gars.data || [])
+        .map((row) => {
+          const g = Array.isArray(row.garantias) ? row.garantias[0] : row.garantias;
+          if (!g?.id) return null;
+          return { id: g.id, nome: g.nome, to: `/garantias/${g.id}` };
+        })
+        .filter(Boolean),
+    });
+
     groups.push({
       key: 'produtos',
       label: 'Produtos',
@@ -586,6 +670,21 @@ async function loadRelatedGroups(table, id) {
         items: [{ id: fornecedor.id, nome: fornecedor.nome, to: `/fornecedores/${fornecedor.id}` }],
       });
     }
+    const gars = await supabase
+      .from('material_garantias')
+      .select('garantia_id, garantias(id, nome)')
+      .eq('material_id', id);
+    groups.push({
+      key: 'garantias',
+      label: 'Garantias',
+      items: (gars.error ? [] : gars.data || [])
+        .map((row) => {
+          const g = Array.isArray(row.garantias) ? row.garantias[0] : row.garantias;
+          if (!g?.id) return null;
+          return { id: g.id, nome: g.nome, to: `/garantias/${g.id}` };
+        })
+        .filter(Boolean),
+    });
     groups.push({
       key: 'locais',
       label: 'Locais',
@@ -635,7 +734,7 @@ async function loadRelatedGroups(table, id) {
     });
     groups.push({
       key: 'materiais',
-      label: 'Materiais cobertos',
+      label: 'Produto',
       items: (mats.data || [])
         .map((row) => {
           const m = Array.isArray(row.materiais) ? row.materiais[0] : row.materiais;
@@ -929,6 +1028,68 @@ function FormField({ table, col, form, setForm }) {
   );
 }
 
+function produtosDoFornecedor(options, links) {
+  const doFornecedor = (options.materiais || []).filter((item) => item.fornecedor_id === links.fornecedorId);
+  const selecionado = (options.materiais || []).find((item) => item.id === links.materialId);
+  if (selecionado && !doFornecedor.some((item) => item.id === selecionado.id)) {
+    return [selecionado, ...doFornecedor];
+  }
+  return doFornecedor;
+}
+
+function GarantiaFormFields({ form, setForm, links, setLinks, options }) {
+  const produtos = links.fornecedorId ? produtosDoFornecedor(options, links) : [];
+  return (
+    <>
+      <FormField table="garantias" col="nome" form={form} setForm={setForm} />
+      <Field label="Fornecedor">
+        <select
+          value={links.fornecedorId || ''}
+          required
+          onChange={(e) => {
+            const fornecedorId = e.target.value;
+            const ainda = (options.materiais || []).some(
+              (item) => item.id === links.materialId && item.fornecedor_id === fornecedorId,
+            );
+            setLinks({ ...links, fornecedorId, materialId: ainda ? links.materialId : '' });
+          }}
+        >
+          <option value="">Selecione o fornecedor</option>
+          {options.fornecedores.map((opt) => (
+            <option key={opt.id} value={opt.id}>{opt.nome}</option>
+          ))}
+        </select>
+      </Field>
+      <Field label="Produto">
+        <select
+          value={links.materialId || ''}
+          required
+          disabled={!links.fornecedorId}
+          onChange={(e) => setLinks({ ...links, materialId: e.target.value })}
+        >
+          <option value="">{links.fornecedorId ? 'Selecione o produto' : 'Escolha o fornecedor primeiro'}</option>
+          {produtos.map((opt) => (
+            <option key={opt.id} value={opt.id}>{opt.nome}</option>
+          ))}
+        </select>
+      </Field>
+      {links.fornecedorId && !produtos.length ? (
+        <p className="hint" style={{ marginTop: 0 }}>
+          Este fornecedor ainda não tem produto. Cadastre o material nele antes de criar a garantia.
+        </p>
+      ) : null}
+      <div className="catalog-form-grid">
+        <FormField table="garantias" col="prazo_valor" form={form} setForm={setForm} />
+        <FormField table="garantias" col="prazo_unidade" form={form} setForm={setForm} />
+      </div>
+      <FormField table="garantias" col="data_fim" form={form} setForm={setForm} />
+      <FormField table="garantias" col="motivos_perda_garantia" form={form} setForm={setForm} />
+      <FormField table="garantias" col="descricao" form={form} setForm={setForm} />
+      <FormField table="garantias" col="telefone" form={form} setForm={setForm} />
+    </>
+  );
+}
+
 function CatalogFormBody({
   table,
   form,
@@ -981,7 +1142,7 @@ function CatalogFormBody({
           <div className="catalog-form-section">
             <h3>Garantia do produto</h3>
             <p className="hint" style={{ marginTop: 0 }}>
-              A garantia fica vinculada a este produto. Não é um cadastro separado.
+              Estes dados ficam neste produto. O cadastro da tela Garantias liga a cobertura a um fornecedor e a um produto.
             </p>
             <div className="catalog-form-grid">
               <FormField table={table} col="prazo_valor" form={form} setForm={setForm} />
@@ -993,6 +1154,14 @@ function CatalogFormBody({
             <FormField table={table} col="telefone" form={form} setForm={setForm} />
           </div>
         </>
+      ) : table === 'garantias' ? (
+        <GarantiaFormFields
+          form={form}
+          setForm={setForm}
+          links={links}
+          setLinks={setLinks}
+          options={options}
+        />
       ) : (
         CONFIG[table].fields.map((col) => (
           <FormField key={col} table={table} col={col} form={form} setForm={setForm} />
@@ -1107,11 +1276,7 @@ export function CatalogList({ table }) {
   const [q, setQ] = useState('');
   const [form, setForm] = useState({});
   const [logoFile, setLogoFile] = useState(null);
-  const [links, setLinks] = useState({
-    fornecedorId: '',
-    materialIds: [],
-    localIds: [],
-  });
+  const [links, setLinks] = useState({ ...LINKS_VAZIOS });
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
@@ -1131,7 +1296,8 @@ export function CatalogList({ table }) {
       .eq('condominio_id', condoId)
       .order('nome');
     if (err) setError(err.message);
-    setRows(table === 'fornecedores' ? await withLogoUrls(data || []) : (data || []));
+    const base = data || [];
+    setRows(table === 'fornecedores' ? await withLogoUrls(base) : await anexarVinculosGarantia(table, base));
   }
 
   async function loadOptions() {
@@ -1173,7 +1339,7 @@ export function CatalogList({ table }) {
       });
       setForm({});
       setLogoFile(null);
-      setLinks({ fornecedorId: '', materialIds: [], localIds: [] });
+      setLinks({ ...LINKS_VAZIOS });
       await Promise.all([load(), loadOptions()]);
     } catch (err) {
       setError(err.message || 'Não foi possível salvar.');
@@ -1188,7 +1354,7 @@ export function CatalogList({ table }) {
   const detailTable = detail?.table || table;
   const detailFields = selected ? detailFieldsFor(detailTable, selected) : [];
   const editingRecord = Boolean(editState && editState.id === selected?.id && editState.table === detailTable);
-  const podeExcluir = editable && ['fornecedores', 'materiais', 'locais'].includes(detailTable);
+  const podeExcluir = editable && ['fornecedores', 'materiais', 'locais', 'garantias'].includes(detailTable);
 
   function openRecord(row) {
     setEditState(null);
@@ -1299,7 +1465,9 @@ export function CatalogList({ table }) {
               : <Icon name="box" size={18} />)
             : table === 'locais'
               ? (row) => <Icon name={iconForLocal(row.nome, row.descricao)} size={20} />
-              : undefined}
+              : table === 'garantias'
+                ? () => <Icon name="shield" size={18} />
+                : undefined}
           getTags={(row) => catalogTags(table, row)}
           onSelect={openRecord}
         />
@@ -1396,7 +1564,7 @@ export function CatalogDetail({ table }) {
   const [editLoading, setEditLoading] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deletingBusy, setDeletingBusy] = useState(false);
-  const podeExcluir = editable && ['fornecedores', 'materiais', 'locais'].includes(table);
+  const podeExcluir = editable && ['fornecedores', 'materiais', 'locais', 'garantias'].includes(table);
 
   useEffect(() => {
     let cancelled = false;

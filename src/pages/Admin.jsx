@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useSession } from '../lib/session';
 import { CARGO_LABEL } from '../lib/permissions';
-import { criarConvite, criarLoginSemTrocarSessao, listarConvites, listarUsuariosCondominio, vincularUsuario } from '../lib/api';
+import { criarConvite, criarLoginSemTrocarSessao, definirTipoApartamentoUsuario, definirTipoConvite, listarConvites, listarUsuariosCondominio, vincularUsuario } from '../lib/api';
 import { copiarTexto } from '../lib/parseSeed';
 import { conviteUrl } from '../lib/branding';
 import { formatDateTime } from '../lib/format';
@@ -141,6 +141,20 @@ function UnidadeFields({ value, onChange, required, tipo = null }) {
   );
 }
 
+function TipoAptoField({ tipos, value, onChange }) {
+  if (!tipos.length) {
+    return <p className="hint">Cadastre os tipos em Tipo Apto para vincular o morador.</p>;
+  }
+  return (
+    <Field label="Tipo de apartamento">
+      <select value={value} onChange={(e) => onChange(e.target.value)} required>
+        <option value="">Selecione o tipo</option>
+        {tipos.map((tipo) => <option key={tipo.id} value={tipo.id}>{tipo.nome}</option>)}
+      </select>
+    </Field>
+  );
+}
+
 function statusConvite(row) {
   if (row?.usado_em) return 'Usado';
   if (row?.expires_at && new Date(row.expires_at) < new Date()) return 'Expirado';
@@ -156,11 +170,12 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
   const [busy, setBusy] = useState(false);
   const [link, setLink] = useState('');
   const [tab, setTab] = useState('criar');
+  const [tiposApto, setTiposApto] = useState([]);
   const [createForm, setCreateForm] = useState({
-    nome: '', email: '', password: '', cargo: 'morador', unidade: { ...EMPTY_UNIDADE },
+    nome: '', email: '', password: '', cargo: 'morador', unidade: { ...EMPTY_UNIDADE }, tipoAptoId: '',
   });
   const [inviteForm, setInviteForm] = useState({
-    email: '', cargo: 'morador', unidade: { ...EMPTY_UNIDADE },
+    email: '', cargo: 'morador', unidade: { ...EMPTY_UNIDADE }, tipoAptoId: '',
   });
   const [selectedConvite, setSelectedConvite] = useState(null);
   const [tipoUnidade, setTipoUnidade] = useState(null);
@@ -178,8 +193,23 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
       .select('identificacao, andar')
       .eq('condominio_id', condoId)
       .then(({ data }) => setTipoUnidade(tipoDoCondominio(data)));
+    const tipos = await supabase
+      .from('tipos_apartamento')
+      .select('id, nome')
+      .eq('condominio_id', condoId)
+      .order('ordem');
+    setTiposApto(tipos.error ? [] : (tipos.data || []));
+    const vinculos = await supabase
+      .from('usuario_condominio')
+      .select('usuario_id, tipos_apartamento(nome)')
+      .eq('condominio_id', condoId);
+    const tipoPorUsuario = Object.fromEntries((vinculos.data || []).map((row) => {
+      const tipo = Array.isArray(row.tipos_apartamento) ? row.tipos_apartamento[0] : row.tipos_apartamento;
+      return [row.usuario_id, tipo?.nome || ''];
+    }));
     try {
-      setRows(await listarUsuariosCondominio(condoId));
+      const lista = await listarUsuariosCondominio(condoId);
+      setRows(lista.map((row) => ({ ...row, tipoNome: tipoPorUsuario[row.usuario_id] || '' })));
     } catch (err) {
       setError(err.message || 'Não foi possível carregar os usuários.');
       setRows([]);
@@ -209,6 +239,9 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
       const erroUnidade = ehMorador ? validarUnidade(createForm.unidade, tipoUnidade) : '';
       if (erroUnidade) throw new Error(erroUnidade);
       const unidadeTexto = ehMorador ? montarUnidadeTexto(unidadeDoTipo(createForm.unidade, tipoUnidade)) : null;
+      if (ehMorador && tiposApto.length && !createForm.tipoAptoId) {
+        throw new Error('Selecione o tipo de apartamento.');
+      }
 
       let userId = null;
       try {
@@ -221,7 +254,7 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
         const msg = String(err.message || '');
         if (!/already|registered|exists|já|limitou o e-mail|rate_limit/i.test(msg)) throw err;
       }
-      await vincularUsuario({
+      const vinculado = await vincularUsuario({
         condominioId: condoId,
         cargo: createForm.cargo,
         usuarioId: userId,
@@ -229,7 +262,15 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
         unidadeTexto,
         nome: createForm.nome,
       });
-      setCreateForm({ nome: '', email: '', password: '', cargo: 'morador', unidade: { ...EMPTY_UNIDADE } });
+      const usuarioVinculado = userId || vinculado;
+      if (ehMorador && createForm.tipoAptoId && usuarioVinculado) {
+        await definirTipoApartamentoUsuario({
+          condominioId: condoId,
+          usuarioId: usuarioVinculado,
+          tipoId: createForm.tipoAptoId,
+        });
+      }
+      setCreateForm({ nome: '', email: '', password: '', cargo: 'morador', unidade: { ...EMPTY_UNIDADE }, tipoAptoId: '' });
       setOk('Usuário criado e vinculado a este condomínio.');
       await load();
     } catch (err) {
@@ -249,6 +290,9 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
       const erroUnidade = ehMorador ? validarUnidade(inviteForm.unidade, tipoUnidade) : '';
       if (erroUnidade) throw new Error(erroUnidade);
       const unidadeTexto = ehMorador ? montarUnidadeTexto(unidadeDoTipo(inviteForm.unidade, tipoUnidade)) : null;
+      if (ehMorador && tiposApto.length && !inviteForm.tipoAptoId) {
+        throw new Error('Selecione o tipo de apartamento.');
+      }
 
       const token = await criarConvite({
         condominioId: condoId,
@@ -256,11 +300,14 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
         email: inviteForm.email,
         unidadeTexto,
       });
+      if (ehMorador && inviteForm.tipoAptoId) {
+        await definirTipoConvite({ token, tipoId: inviteForm.tipoAptoId });
+      }
       const url = conviteUrl(token);
       setLink(url);
       await copiarTexto(url);
       setOk('Link gerado e copiado. Envie para a pessoa criar o próprio acesso.');
-      setInviteForm({ email: '', cargo: inviteForm.cargo, unidade: { ...EMPTY_UNIDADE } });
+      setInviteForm({ email: '', cargo: inviteForm.cargo, unidade: { ...EMPTY_UNIDADE }, tipoAptoId: '' });
       await load();
     } catch (err) {
       setError(err.message || 'Não foi possível gerar o convite.');
@@ -292,7 +339,7 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
                 {rows.map((row) => (
                   <li key={row.id} className="usuarios-nome-unidade-item">
                     <strong className="usuarios-nome">{row.nome}</strong>
-                    <span className="usuarios-unidade">{row.unidade}</span>
+                    <span className="usuarios-unidade">{[row.unidade, row.tipoNome ? `Tipo ${row.tipoNome}` : ''].filter(Boolean).join(' · ')}</span>
                   </li>
                 ))}
               </ul>
@@ -335,7 +382,7 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
                 <Field label="Cargo">
                   <select
                     value={createForm.cargo}
-                    onChange={(e) => setCreateForm({ ...createForm, cargo: e.target.value, unidade: { ...EMPTY_UNIDADE } })}
+                    onChange={(e) => setCreateForm({ ...createForm, cargo: e.target.value, unidade: { ...EMPTY_UNIDADE }, tipoAptoId: '' })}
                   >
                     {CARGOS_CONVITE.map((tipo) => (
                       <option key={tipo} value={tipo}>{CARGO_LABEL[tipo]}</option>
@@ -343,12 +390,19 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
                   </select>
                 </Field>
                 {createForm.cargo === 'morador' ? (
-                  <UnidadeFields
-                    value={createForm.unidade}
-                    onChange={(unidade) => setCreateForm({ ...createForm, unidade })}
-                    tipo={tipoUnidade}
-                    required
-                  />
+                  <>
+                    <UnidadeFields
+                      value={createForm.unidade}
+                      onChange={(unidade) => setCreateForm({ ...createForm, unidade })}
+                      tipo={tipoUnidade}
+                      required
+                    />
+                    <TipoAptoField
+                      tipos={tiposApto}
+                      value={createForm.tipoAptoId}
+                      onChange={(tipoAptoId) => setCreateForm({ ...createForm, tipoAptoId })}
+                    />
+                  </>
                 ) : null}
                 <Btn type="submit" icon="user" disabled={busy}>{busy ? 'Salvando…' : 'Criar usuário'}</Btn>
               </form>
@@ -361,7 +415,7 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
                 <Field label="Cargo">
                   <select
                     value={inviteForm.cargo}
-                    onChange={(e) => setInviteForm({ ...inviteForm, cargo: e.target.value, unidade: { ...EMPTY_UNIDADE } })}
+                    onChange={(e) => setInviteForm({ ...inviteForm, cargo: e.target.value, unidade: { ...EMPTY_UNIDADE }, tipoAptoId: '' })}
                   >
                     {CARGOS_CONVITE.map((tipo) => (
                       <option key={tipo} value={tipo}>{CARGO_LABEL[tipo]}</option>
@@ -369,12 +423,19 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
                   </select>
                 </Field>
                 {inviteForm.cargo === 'morador' ? (
-                  <UnidadeFields
-                    value={inviteForm.unidade}
-                    onChange={(unidade) => setInviteForm({ ...inviteForm, unidade })}
-                    tipo={tipoUnidade}
-                    required
-                  />
+                  <>
+                    <UnidadeFields
+                      value={inviteForm.unidade}
+                      onChange={(unidade) => setInviteForm({ ...inviteForm, unidade })}
+                      tipo={tipoUnidade}
+                      required
+                    />
+                    <TipoAptoField
+                      tipos={tiposApto}
+                      value={inviteForm.tipoAptoId}
+                      onChange={(tipoAptoId) => setInviteForm({ ...inviteForm, tipoAptoId })}
+                    />
+                  </>
                 ) : null}
                 <Btn type="submit" icon="copy" disabled={busy}>{busy ? 'Gerando…' : 'Gerar e copiar link'}</Btn>
                 {link ? <p className="hint" style={{ wordBreak: 'break-all' }}>{link}</p> : null}

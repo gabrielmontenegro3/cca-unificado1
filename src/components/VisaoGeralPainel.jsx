@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useSession } from '../lib/session';
-import { aplicarEscopoChamados, can, ehCargoAdministracao, ehCargoConstrutora, ehChamadoAdministracao, STATUS_LABEL, statusUi } from '../lib/permissions';
+import { aplicarEscopoChamados, can, documentoVisivelPara, ehCargoAdministracao, ehCargoConstrutora, ehChamadoAdministracao, STATUS_LABEL, statusUi } from '../lib/permissions';
 import { chamadoNumero, embedOne, formatDate, formatTelefone, labelUnidade, maintenanceTone, nomePessoa } from '../lib/format';
 import { mapaLeituraConversas } from '../lib/notifications';
 import { useChatAoVivo } from '../lib/chatAoVivo';
@@ -26,7 +26,7 @@ function atalhosPara(cargoTipo) {
       { to: '/manutencao', icon: 'wrench', label: 'Manutenções', hint: 'Agenda preventiva' },
       { to: '/documentos', icon: 'folder', label: 'Documentos', hint: 'Arquivos do empreendimento' },
       { to: '/governanca-tecnica', icon: 'clipboard', label: 'Governança técnica', hint: 'Laudos do condomínio' },
-      { to: '/materiais', icon: 'shield', label: 'Garantias', hint: 'Prazos no produto' },
+      { to: '/garantias', icon: 'shield', label: 'Garantias', hint: 'Fornecedor e produto' },
     ];
   }
   if (can(t, 'manage_traceability')) {
@@ -55,7 +55,7 @@ function atalhosPara(cargoTipo) {
     { to: '/documentos', icon: 'folder', label: 'Documentos', hint: 'Arquivos do empreendimento' },
     { to: '/boletins', icon: 'newspaper', label: 'Boletins', hint: 'Comunicados' },
     { to: '/contatos', icon: 'phone', label: 'Contatos', hint: 'Telefones úteis' },
-    { to: '/materiais', icon: 'shield', label: 'Garantias', hint: 'Prazos no produto' },
+    { to: '/garantias', icon: 'shield', label: 'Garantias', hint: 'Fornecedor e produto' },
   ];
 }
 
@@ -244,7 +244,7 @@ export function VisaoGeralPainel() {
         isMorador
           ? supabase
             .from('documentos_empreendimento')
-            .select('id, titulo, descricao, ordem, created_at, arquivos(*)')
+            .select('*, arquivos(*)')
             .eq('condominio_id', condoId)
             .order('ordem', { ascending: true })
             .limit(4)
@@ -300,7 +300,7 @@ export function VisaoGeralPainel() {
         };
       }));
       if (!live) return;
-      setDocumentos(docs);
+      setDocumentos(docs.filter((row) => documentoVisivelPara(row, cargoTipo)));
       if (isMorador) {
         const destaque = chamadoDaVez(listaChamados);
         const { conversaId, mensagens: msgs } = await carregarMensagensChamado(destaque, condoId);
