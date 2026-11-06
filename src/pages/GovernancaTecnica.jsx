@@ -2,11 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useSession } from '../lib/session';
-import { can, ehCargoConstrutora, CRITICIDADE_LAUDO } from '../lib/permissions';
+import { can, ehCargoConstrutora } from '../lib/permissions';
 import { chamadoNumero, rotuloLaudoUnidade } from '../lib/format';
 import {
   anexarArquivosNasMensagens,
-  atualizarCriticidadeLaudo,
   carregarLaudoGovernanca,
   enviarArquivoLaudo,
   enviarMensagemLaudo,
@@ -24,7 +23,7 @@ import {
 import { useChatAoVivo } from '../lib/chatAoVivo';
 import { Alert, Btn, Empty } from '../components/ui';
 import { Icon } from '../components/icons';
-import { ChatComposer, ChatHeader, CriticidadeTag, LaudoThread, LaudoThumb } from '../components/Chat';
+import { ChatComposer, ChatHeader, LaudoThread, LaudoThumb } from '../components/Chat';
 import { UnreadOrb } from '../components/UnreadOrb';
 
 export function GovernancaTecnicaPage() {
@@ -143,19 +142,9 @@ export function GovernancaTecnicaPage() {
   }, [mensagens]);
 
   const filtrados = useMemo(() => rows.filter((row) => {
-    const text = `${rotuloLaudoUnidade(row)} ${row.chamado_numero || row.chamados?.numero_registro || ''} ${row.criticidade || ''}`.toLowerCase();
+    const text = `${rotuloLaudoUnidade(row)} ${row.chamado_numero || row.chamados?.numero_registro || ''}`.toLowerCase();
     return text.includes(q.toLowerCase());
   }), [rows, q]);
-
-  async function mudarCriticidade(valor) {
-    if (!id || !canCreate) return;
-    try {
-      await atualizarCriticidadeLaudo(id, valor);
-      await Promise.all([loadChat(id), loadLista()]);
-    } catch (err) {
-      setError(err.message || 'Não foi possível atualizar a criticidade.');
-    }
-  }
 
   async function send(e) {
     e.preventDefault();
@@ -206,7 +195,7 @@ export function GovernancaTecnicaPage() {
               : 'Laudos técnicos e chat com a Construtora, vinculados aos chamados.'}
           </p>
         </div>
-        {canCreate ? <Btn to="/laudos/novo" icon="plus">Novo laudo</Btn> : null}
+        {canCreate ? <Btn to="/laudos/novo" icon="plus">Laudo</Btn> : null}
       </header>
       <div className="page-body">
         <Alert error={error} />
@@ -242,7 +231,6 @@ export function GovernancaTecnicaPage() {
                     <small className="suporte-item-preview">
                       {chamadoNumero(row.chamados?.numero_registro ?? row.chamado_numero)}
                     </small>
-                    <CriticidadeTag value={row.criticidade} />
                   </div>
                 </button>
               );
@@ -258,21 +246,6 @@ export function GovernancaTecnicaPage() {
                   title={rotuloLaudoUnidade(laudo)}
                   subtitle={chamadoNumero(laudo.chamados?.numero_registro ?? laudo.chamado_numero)}
                 >
-                  {canCreate ? (
-                    <label className="laudo-crit-select">
-                      <span>Criticidade</span>
-                      <select
-                        value={String(laudo.criticidade || 'media').toLowerCase()}
-                        onChange={(e) => mudarCriticidade(e.target.value)}
-                      >
-                        {CRITICIDADE_LAUDO.map((item) => (
-                          <option key={item.id} value={item.id}>{item.label}</option>
-                        ))}
-                      </select>
-                    </label>
-                  ) : (
-                    <CriticidadeTag value={laudo.criticidade} />
-                  )}
                   {laudo.chamados && can(cargoTipo, 'view_all_tickets') ? (
                     <Btn
                       variant="ghost"

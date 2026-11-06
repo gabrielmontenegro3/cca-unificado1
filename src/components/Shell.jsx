@@ -2,6 +2,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { NavLink, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useSession } from '../lib/session';
 import { CARGO_LABEL, navGroupsFor } from '../lib/permissions';
+import { supabase } from '../lib/supabase';
+import { tipoDoCondominio } from '../lib/tipoUnidade';
 import { BrandLogo, UserAvatar } from './ui';
 import { Icon } from './icons';
 import { loginPathDaConstrutora, loginPathDoCondominio, nomeExibicaoConstrutora } from '../lib/branding';
@@ -133,7 +135,24 @@ export function Shell() {
   const { profile, condo, isGestaoTecnica, isConstrutoraOrg, construtora, condoId, branding, fotoUrl, signOut, cargoTipo } = useSession();
   const navigate = useNavigate();
   const { pathname } = useLocation();
-  const groups = useMemo(() => navGroupsFor(cargoTipo), [cargoTipo]);
+  const [ehCasas, setEhCasas] = useState(false);
+  const groups = useMemo(() => navGroupsFor(cargoTipo, { ehCasas }), [cargoTipo, ehCasas]);
+
+  useEffect(() => {
+    if (!condoId) {
+      setEhCasas(false);
+      return undefined;
+    }
+    let ativo = true;
+    supabase
+      .from('unidades')
+      .select('identificacao, andar')
+      .eq('condominio_id', condoId)
+      .then(({ data }) => {
+        if (ativo) setEhCasas(tipoDoCondominio(data) === 'casas');
+      });
+    return () => { ativo = false; };
+  }, [condoId]);
   const coverOnTop = pathname === '/visao-geral';
   const [openGroups, setOpenGroups] = useState({ empreendimento: true });
   const [playToken, setPlayToken] = useState({ id: '', token: 0 });

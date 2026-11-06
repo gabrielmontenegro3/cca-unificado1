@@ -7,6 +7,7 @@ import { criarConvite, criarLoginSemTrocarSessao, definirTipoApartamentoUsuario,
 import { copiarTexto } from '../lib/parseSeed';
 import { conviteUrl } from '../lib/branding';
 import { formatDateTime } from '../lib/format';
+import { tipoDoCondominio } from '../lib/tipoUnidade';
 import { Alert, Btn, Empty, Field, MaskedInput, Page } from '../components/ui';
 import { EditTelaButton, useEditTela } from '../components/EditTela';
 import { DetailFields, Modal } from '../components/DataList';
@@ -34,16 +35,6 @@ function montarUnidadeTexto({ bloco, torre, casa, apartamento }) {
 
   if (esquerda && direita) return `${esquerda} / ${direita}`;
   return direita || esquerda || '';
-}
-
-/** 'casas' | 'predios' | null (sem unidades ou condomínio misto). */
-function tipoDoCondominio(unidades) {
-  const reais = (unidades || []).filter((u) => !/^[áa]reas comuns$/i.test(limparParte(u.identificacao)));
-  const casas = reais.filter((u) => /^casa\b/i.test(limparParte(u.identificacao))).length;
-  const apts = reais.filter((u) => /\b(apt|apto|apartamento)\b/i.test(limparParte(u.identificacao)) || limparParte(u.andar)).length;
-  if (casas && !apts) return 'casas';
-  if (apts && !casas) return 'predios';
-  return null;
 }
 
 function unidadeDoTipo(value, tipo) {
@@ -143,7 +134,7 @@ function UnidadeFields({ value, onChange, required, tipo = null }) {
 
 function TipoAptoField({ tipos, value, onChange }) {
   if (!tipos.length) {
-    return <p className="hint">Cadastre os tipos em Tipo Apto para vincular o morador.</p>;
+    return <p className="hint">Cadastre os tipos em Meu apartamento para vincular o morador.</p>;
   }
   return (
     <Field label="Tipo de apartamento">

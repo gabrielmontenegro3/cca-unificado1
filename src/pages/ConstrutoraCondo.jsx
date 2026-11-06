@@ -349,7 +349,7 @@ export function ConstrutoraCondoPage() {
   }, [laudoMsgs, chamadoMsgs, historico, visitas, laudoId, chamadoId]);
 
   const govFiltrados = useMemo(() => laudos.filter((row) => {
-    const text = `${rotuloLaudoUnidade(row)} ${row.titulo || ''} ${row.chamado_numero || row.chamados?.numero_registro || ''} ${row.criticidade || ''}`.toLowerCase();
+    const text = `${rotuloLaudoUnidade(row)} ${row.titulo || ''} ${row.chamado_numero || row.chamados?.numero_registro || ''}`.toLowerCase();
     return text.includes(qGov.toLowerCase());
   }), [laudos, qGov]);
 

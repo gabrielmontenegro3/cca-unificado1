@@ -34,20 +34,6 @@ export function statusUi(value) {
   return STATUS_UI.find((item) => item.match.includes(value)) || STATUS_UI[0];
 }
 
-export const CRITICIDADE_LAUDO = [
-  { id: 'baixa', label: 'Baixa' },
-  { id: 'media', label: 'Média' },
-  { id: 'alta', label: 'Alta' },
-  { id: 'critica', label: 'Crítica' },
-];
-
-export const CRITICIDADE_LABEL = {
-  baixa: 'Baixa',
-  media: 'Média',
-  alta: 'Alta',
-  critica: 'Crítica',
-};
-
 export const CARGO_LABEL = {
   administrador: 'Administrador',
   admin_sistema: 'Administrador do sistema',
@@ -172,16 +158,36 @@ export function can(tipo, action) {
   return Boolean(map[action]);
 }
 
-export function navFor(tipo) {
-  return navGroupsFor(tipo).flatMap((group) => group.items);
+function grupoMeuImovel(tipo, { ehCasas } = {}) {
+  const t = String(tipo || '').toLowerCase().trim();
+  const isAdminCondo = t === 'administracao';
+  return {
+    id: 'meu-imovel',
+    label: 'Meu imóvel',
+    icon: 'door',
+    items: [
+      { to: '/recebimento', label: 'Recebimento', icon: 'doorClosed' },
+      ...(!isAdminCondo ? [{
+        to: '/meu-apartamento',
+        label: ehCasas ? 'Meu imóvel' : 'Meu apto',
+        icon: 'layout',
+      }] : []),
+      { to: '/manual-uso', label: 'Manual de uso', icon: 'book' },
+    ],
+  };
 }
 
-export function navGroupsFor(tipo) {
+export function navFor(tipo, opts) {
+  return navGroupsFor(tipo, opts).flatMap((group) => group.items);
+}
+
+export function navGroupsFor(tipo, opts = {}) {
   const t = String(tipo || '').toLowerCase().trim();
   const isGT = t === 'gestao_tecnica';
   const isMorador = t === 'morador';
   const isAdminCondo = t === 'administracao';
   const isConstrutora = t === 'construtora';
+  const meuImovel = grupoMeuImovel(tipo, opts);
 
   if (isConstrutora) {
     return [
@@ -192,16 +198,15 @@ export function navGroupsFor(tipo) {
         items: [
           { to: '/visao-geral', label: 'Visão geral', icon: 'home' },
           { to: '/documentos', label: 'Documentos', icon: 'folder' },
-          { to: '/meu-imovel', label: 'Meu imóvel', icon: 'door' },
-          { to: '/tipo-apto', label: 'Tipo Apto', icon: 'layout' },
         ],
       },
+      meuImovel,
       {
         id: 'manutencao',
         label: 'Manutenção',
         icon: 'wrench',
         items: [
-          { to: '/manutencao', label: 'Manutenções', icon: 'wrench' },
+          { to: '/manutencao', label: 'Execuções', icon: 'wrench' },
           { to: '/chamados', label: 'Chamados', icon: 'message' },
         ],
       },
@@ -236,21 +241,19 @@ export function navGroupsFor(tipo) {
         ...(isMorador ? [{ to: '/assistencia-tecnica', label: 'Assistência técnica', icon: 'headset' }] : []),
         ...(isAdminCondo ? [{ to: '/chamados', label: 'Chamados', icon: 'headset' }] : []),
         { to: '/documentos', label: 'Documentos', icon: 'folder' },
-        { to: '/meu-imovel', label: 'Meu imóvel', icon: 'door' },
-        { to: '/tipo-apto', label: 'Tipo Apto', icon: 'layout' },
         { to: '/boletins', label: 'Boletins informativos', icon: 'newspaper' },
       ],
     },
+    meuImovel,
     {
       id: 'manutencao',
       label: 'Manutenção',
       icon: 'wrench',
       items: [
-        { to: '/manutencao', label: 'Manutenções', icon: 'wrench' },
+        ...(!isMorador ? [{ to: '/manutencao', label: 'Execuções', icon: 'wrench' }] : []),
         ...(isGT ? [{ to: '/chamados', label: 'Chamados', icon: 'message' }] : []),
         ...(isGT ? [{ to: '/rastreabilidade', label: 'Rastreabilidade', icon: 'layers' }] : []),
         ...(isGT ? [{ to: '/agendar-visita', label: 'Agendar visita', icon: 'calendar' }] : []),
-        ...(isGT ? [{ to: '/relatorio', label: 'Relatório', icon: 'file' }] : []),
         ...(isGT ? [{ to: '/governanca-tecnica', label: 'Governança técnica', icon: 'clipboard' }] : []),
       ],
     },

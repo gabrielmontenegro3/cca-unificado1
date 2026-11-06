@@ -21,8 +21,17 @@ export function formatDbError(error, contexto = '') {
   return `${prefix}${raw}`;
 }
 
+/** Hoje no fuso do aparelho, em aaaa-mm-dd (toISOString usaria UTC e viraria o dia às 21h no Brasil). */
+export function hojeISO() {
+  return new Date().toLocaleDateString('sv-SE');
+}
+
 export function formatDate(value) {
   if (!value) return '—';
+  // Data pura (aaaa-mm-dd) do banco: formata direto. new Date() leria como
+  // meia-noite UTC e, no Brasil (UTC-3), mostraria o dia anterior.
+  const soData = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value));
+  if (soData) return `${soData[3]}/${soData[2]}/${soData[1]}`;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '—';
   return date.toLocaleDateString('pt-BR');

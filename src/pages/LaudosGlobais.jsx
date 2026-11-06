@@ -23,7 +23,7 @@ import { useChatAoVivo } from '../lib/chatAoVivo';
 import { Alert, Btn, Empty } from '../components/ui';
 import { Icon } from '../components/icons';
 import { GestaoBar } from '../components/GestaoBar';
-import { ChatComposer, ChatHeader, CriticidadeTag, LaudoThread, LaudoThumb } from '../components/Chat';
+import { ChatComposer, ChatHeader, LaudoThread, LaudoThumb } from '../components/Chat';
 import { UnreadOrb } from '../components/UnreadOrb';
 
 export function LaudosGlobaisPage() {
@@ -145,7 +145,7 @@ export function LaudosGlobaisPage() {
   }, [mensagens]);
 
   const filtrados = rows.filter((row) => {
-    const text = `${rotuloLaudoUnidade(row)} ${row.chamado_numero || row.chamados?.numero_registro || ''} ${row.condominios?.nome || ''} ${row.criticidade || ''}`.toLowerCase();
+    const text = `${rotuloLaudoUnidade(row)} ${row.chamado_numero || row.chamados?.numero_registro || ''} ${row.condominios?.nome || ''}`.toLowerCase();
     return (!condoFiltro || row.condominio_id === condoFiltro) && text.includes(q.toLowerCase());
   });
 
@@ -259,7 +259,6 @@ export function LaudosGlobaisPage() {
                         <small className="suporte-item-preview">
                           {chamadoNumero(row.chamados?.numero_registro ?? row.chamado_numero)}
                         </small>
-                        <CriticidadeTag value={row.criticidade} />
                       </div>
                     </button>
                   );
@@ -278,7 +277,6 @@ export function LaudosGlobaisPage() {
                   title={rotuloLaudoUnidade(laudo)}
                   subtitle={`${chamadoNumero(laudo.chamados?.numero_registro ?? laudo.chamado_numero)}${laudo.condominios?.nome ? ` · ${laudo.condominios.nome}` : ''}`}
                 >
-                  <CriticidadeTag value={laudo.criticidade} />
                   <Btn
                     variant="ghost"
                     icon="building"

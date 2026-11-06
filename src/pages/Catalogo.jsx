@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useSession } from '../lib/session';
-import { publicOrSignedUrl, salvarLogoFornecedor } from '../lib/api';
+import { arquivoEhImagem, publicOrSignedUrl, salvarLogoFornecedor, uploadArquivo } from '../lib/api';
 import { formatCnpj, formatDate, formatDbError, formatTelefone, normalizarCnpj } from '../lib/format';
 import { Alert, Btn, Field, MaskedInput, Page } from '../components/ui';
 import { Icon } from '../components/icons';
 import { EditTelaButton, useEditTela } from '../components/EditTela';
 import { DataList, Modal } from '../components/DataList';
+import { ArquivoPreviewCard } from '../components/ArquivoPreview';
 import { AREA_LOCAL } from '../lib/permissions';
 import { areaForLocal, iconForLocal, tipoForLocal } from '../lib/localIcon';
 
@@ -1264,6 +1265,120 @@ function CatalogEditPanel({
   );
 }
 
+const TELAS_ARQUIVO_PRINCIPAL = new Set(['fornecedores', 'materiais', 'garantias']);
+
+function erroArquivoPrincipal(err) {
+  const msg = String(err?.message || err || '');
+  if (/catalogo_arquivos_principais|schema cache|does not exist|42P01|PGRST204|PGRST205/i.test(msg)) {
+    return 'Rode o arquivo supabase/catalogo-arquivo-principal.sql no SQL Editor do Supabase e tente de novo.';
+  }
+  return msg || 'Não foi possível concluir.';
+}
+
+function ArquivoPrincipalCatalogo({ table, condoId, userId, editable }) {
+  const [url, setUrl] = useState('');
+  const [nome, setNome] = useState('');
+  const [arquivoId, setArquivoId] = useState('');
+  const [arquivoInfo, setArquivoInfo] = useState(null);
+  const [file, setFile] = useState(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [fileKey, setFileKey] = useState(0);
+
+  async function load() {
+    if (!condoId) return;
+    const { data, error: err } = await supabase
+      .from('catalogo_arquivos_principais')
+      .select('arquivo_id, arquivos(id, nome_original, storage_path, mime_type, tipo, tamanho_bytes)')
+      .eq('condominio_id', condoId)
+      .eq('tela', table)
+      .maybeSingle();
+    if (err) {
+      setError(erroArquivoPrincipal(err));
+      setUrl('');
+      return;
+    }
+    const arquivo = Array.isArray(data?.arquivos) ? data.arquivos[0] : data?.arquivos;
+    if (!arquivo?.storage_path) {
+      setUrl('');
+      setNome('');
+      setArquivoId('');
+      setArquivoInfo(null);
+      return;
+    }
+    const assinado = await publicOrSignedUrl(arquivo.storage_path);
+    setArquivoId(arquivo.id || data.arquivo_id || '');
+    setNome(arquivo.nome_original || 'Arquivo principal');
+    setUrl(assinado.data?.signedUrl || '');
+    setArquivoInfo(arquivo);
+    setError('');
+  }
+
+  useEffect(() => { load(); }, [condoId, table]);
+
+  async function anexar(e) {
+    e.preventDefault();
+    if (!file) return;
+    setBusy(true);
+    setError('');
+    try {
+      const arquivo = await uploadArquivo({
+        condominioId: condoId,
+        userId,
+        file,
+        folder: `catalogo/${table}`,
+      });
+      const { error: err } = await supabase.from('catalogo_arquivos_principais').upsert({
+        condominio_id: condoId,
+        tela: table,
+        arquivo_id: arquivo.id,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'condominio_id,tela' });
+      if (err) throw err;
+      if (arquivoId && arquivoId !== arquivo.id) {
+        await supabase.from('arquivos').delete().eq('id', arquivoId);
+      }
+      setFile(null);
+      setFileKey((value) => value + 1);
+      await load();
+    } catch (err) {
+      setError(erroArquivoPrincipal(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!TELAS_ARQUIVO_PRINCIPAL.has(table)) return null;
+
+  return (
+    <section className="catalog-arquivo">
+      <div className="catalog-arquivo-head">
+        <h2>Arquivo principal</h2>
+        {editable ? (
+          <form className="catalog-arquivo-form" onSubmit={anexar}>
+            <input
+              key={fileKey}
+              type="file"
+              onChange={(e) => setFile(e.target.files?.[0] || null)}
+            />
+            <Btn type="submit" icon="paperclip" disabled={busy || !file}>
+              {busy ? 'Anexando…' : (nome ? 'Substituir' : 'Anexar')}
+            </Btn>
+          </form>
+        ) : null}
+      </div>
+      <Alert error={error} />
+      {url && arquivoInfo ? (
+        <div className="catalog-arquivo-previa">
+          <ArquivoPreviewCard arquivo={arquivoInfo} url={url} />
+        </div>
+      ) : (
+        <p className="hint catalog-arquivo-vazio">Nenhum arquivo principal anexado.</p>
+      )}
+    </section>
+  );
+}
+
 export function CatalogList({ table }) {
   const { condoId, session } = useSession();
   const cfg = CONFIG[table];
@@ -1453,6 +1568,12 @@ export function CatalogList({ table }) {
       actions={showEditButton ? <EditTelaButton editing={editing} onToggle={toggleEditing} /> : null}
     >
       <Alert error={error} />
+      <ArquivoPrincipalCatalogo
+        table={table}
+        condoId={condoId}
+        userId={session?.user?.id}
+        editable={editable}
+      />
       <div className="catalog-list">
         <DataList
           rows={filtered}

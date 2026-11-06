@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { arquivoEhImagem, nomeArquivoDaMensagem, publicOrSignedUrl } from '../lib/api';
 import { formatChatTime, formatDate, nomePessoa } from '../lib/format';
-import { CRITICIDADE_LABEL, STATUS_LABEL } from '../lib/permissions';
+import { STATUS_LABEL } from '../lib/permissions';
 import { horarioDoEvento, montarLinhaDoTempoChat } from '../lib/chamadoRastreabilidade';
 import { mensagemEhNova } from '../lib/notifications';
 import { Empty, UserAvatar } from './ui';
@@ -71,15 +71,6 @@ export function LaudoThumb({ capa }) {
   return (
     <span className="laudo-item-thumb laudo-item-thumb--file" aria-hidden="true">
       <Icon name="file" size={18} />
-    </span>
-  );
-}
-
-export function CriticidadeTag({ value }) {
-  const grau = String(value || 'media').toLowerCase();
-  return (
-    <span className={`laudo-crit laudo-crit--${grau}`}>
-      {CRITICIDADE_LABEL[grau] || 'Média'}
     </span>
   );
 }

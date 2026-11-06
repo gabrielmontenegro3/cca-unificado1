@@ -332,7 +332,6 @@ export function VisaoGeralPainel() {
   if (isMorador) {
     const chamadoAtual = chamadoDaVez(chamados);
     const docsVisiveis = documentos.slice(0, 3);
-    const manutVisiveis = manutencoes.slice(0, 4);
     const ultimaMsg = conversaMsgs.length
       ? conversaMsgs[conversaMsgs.length - 1]
       : (chamadoAtual?.descricao
@@ -453,34 +452,6 @@ export function VisaoGeralPainel() {
             </ul>
           </section>
         ) : null}
-
-        <section className="vg-card" aria-label="Manutenções agendadas">
-          <header className="vg-card-head">
-            <h3>Manutenções agendadas</h3>
-            <VerTodos to="/manutencao" show={manutencoes.length > manutVisiveis.length} />
-          </header>
-          {!manutVisiveis.length ? (
-            <p className="vg-empty">Nenhuma manutenção preventiva na agenda.</p>
-          ) : (
-            <ul className="vg-list">
-              {manutVisiveis.map((row) => (
-                <li key={row.id}>
-                  <Link to="/manutencao">
-                    <span className="vg-list-row">
-                      <strong>{row.sistema || row.tipo || 'Manutenção'}</strong>
-                      <span className="vg-manut-date">{formatDate(row.proxima_execucao)}</span>
-                    </span>
-                    <small>
-                      {[row.tipo, TOM_MANUTENCAO[maintenanceTone(row)]]
-                        .filter(Boolean)
-                        .join(' · ')}
-                    </small>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
       </div>
     );
   }

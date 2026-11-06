@@ -1,6 +1,6 @@
 import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 import { useSession } from './lib/session';
-import { ehCargoConstrutora } from './lib/permissions';
+import { ehCargoAdministracao, ehCargoConstrutora } from './lib/permissions';
 import { Shell } from './components/Shell';
 import { LoginPage } from './pages/Login';
 import { SecoesPage } from './pages/Secoes';
@@ -8,6 +8,7 @@ import { DocumentosPage, ContatosPage } from './pages/Conteudo';
 import { BoletinsPage } from './pages/Boletins';
 import { CatalogDetail, CatalogList } from './pages/Catalogo';
 import { ManutencaoPage } from './pages/Manutencao';
+import { RelatorioManutencaoPage } from './pages/RelatorioManutencao';
 import { ChamadoDetalhePage, ChamadoNovoPage, ChamadosPage } from './pages/Chamados';
 import { ChamadoRastreabilidadePage, RastreabilidadeListaPage } from './pages/ChamadoRastreabilidade';
 import { RelatorioPage } from './pages/Relatorio';
@@ -23,7 +24,8 @@ import { LaudosGlobaisPage } from './pages/LaudosGlobais';
 import { GestaoTecnicaUsuariosPage } from './pages/GestaoTecnicaUsuarios';
 import { ConfiguracoesPage, NotificacoesPage, OnboardingPreferencias } from './pages/Sistema';
 import { GovernancaTecnicaPage } from './pages/GovernancaTecnica';
-import { MeuImovelPage } from './pages/MeuImovel';
+import { RecebimentoPage } from './pages/Recebimento';
+import { ManualUsoPage } from './pages/ManualUso';
 import { TipoAptoPage } from './pages/TipoApto';
 import { ConfigCondominioPage, ConfigConstrutoraPage } from './pages/ConfiguracaoGeral';
 import { ConstrutoraRelatoriosPage } from './pages/ConstrutoraRelatorios';
@@ -48,7 +50,10 @@ function rotaSistemaCondominio(pathname) {
     '/boletins',
     '/contatos',
     '/meu-imovel',
+    '/recebimento',
+    '/manual-uso',
     '/tipo-apto',
+    '/meu-apartamento',
     '/sobre-nos',
     '/manutencao',
     '/fornecedores',
@@ -96,6 +101,12 @@ function Guard({ children }) {
   }
   if ((pathname.startsWith('/gestao-tecnica') || pathname.startsWith('/admin-geral')) && !isAdminSistema) {
     return <Navigate to="/" replace />;
+  }
+  if (String(cargoTipo || '').toLowerCase().trim() === 'morador' && (pathname === '/manutencao' || pathname.startsWith('/manutencao/'))) {
+    return <Navigate to="/visao-geral" replace />;
+  }
+  if (ehCargoAdministracao(cargoTipo) && (pathname.startsWith('/meu-apartamento') || pathname.startsWith('/tipo-apto'))) {
+    return <Navigate to="/visao-geral" replace />;
   }
   if (ehCargoConstrutora(cargoTipo)) {
     const laudoMatch = pathname.match(/^\/laudos\/([^/]+)$/);
@@ -190,8 +201,11 @@ export default function App() {
         <Route index element={<HomeRedirect />} />
         <Route path="painel" element={<Navigate to="/visao-geral" replace />} />
         <Route path="visao-geral" element={<VisaoGeralRoute />} />
-        <Route path="meu-imovel" element={<MeuImovelPage />} />
-        <Route path="tipo-apto" element={<TipoAptoPage />} />
+        <Route path="meu-imovel" element={<Navigate to="/recebimento" replace />} />
+        <Route path="recebimento" element={<RecebimentoPage />} />
+        <Route path="manual-uso" element={<ManualUsoPage />} />
+        <Route path="tipo-apto" element={<Navigate to="/meu-apartamento" replace />} />
+        <Route path="meu-apartamento" element={<TipoAptoPage />} />
         <Route path="empreendimento" element={<Navigate to="/visao-geral" replace />} />
         <Route path="sobre-nos" element={<SecoesPage table="sobre_nos" title="Sobre nós" lead="Blocos institucionais." />} />
         <Route path="documentos" element={<DocumentosPage />} />
@@ -206,6 +220,7 @@ export default function App() {
         <Route path="garantias" element={<CatalogList table="garantias" />} />
         <Route path="garantias/:id" element={<CatalogDetail table="garantias" />} />
         <Route path="manutencao" element={<ManutencaoPage />} />
+        <Route path="manutencao/relatorio" element={<RelatorioManutencaoPage />} />
         <Route path="assistencia-tecnica" element={<ChamadosPage />} />
         <Route path="chamados" element={<ChamadosPage />} />
         <Route path="chamados/novo" element={<ChamadoNovoPage />} />

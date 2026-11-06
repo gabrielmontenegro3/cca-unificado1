@@ -13,7 +13,7 @@ export function listInitials(nome, fallback = '?') {
   return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
 }
 
-export function Modal({ open, title, onClose, children, footer, className = '' }) {
+export function Modal({ open, title, onClose, children, footer, className = '', backdropClassName = '' }) {
   useEffect(() => {
     if (!open) return undefined;
     function onKey(e) {
@@ -31,7 +31,7 @@ export function Modal({ open, title, onClose, children, footer, className = '' }
   if (!open) return null;
 
   return (
-    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+    <div className={['modal-backdrop', backdropClassName].filter(Boolean).join(' ')} role="presentation" onClick={onClose}>
       <div
         className={['modal-sheet', className].filter(Boolean).join(' ')}
         role="dialog"

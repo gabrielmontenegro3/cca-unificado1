@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useSession } from '../lib/session';
-import { can, CRITICIDADE_LAUDO } from '../lib/permissions';
+import { can } from '../lib/permissions';
 import { chamadoNumero, labelUnidade } from '../lib/format';
 import { criarLaudo } from '../lib/api';
 import { Alert, Btn, Field, Page } from '../components/ui';
@@ -24,7 +24,6 @@ export function LaudoNovoPage() {
   const [form, setForm] = useState({
     descricao: '',
     chamado_id: params.get('chamado') || '',
-    criticidade: 'media',
   });
   const [files, setFiles] = useState([]);
   const [error, setError] = useState('');
@@ -45,7 +44,7 @@ export function LaudoNovoPage() {
 
   if (!can(cargoTipo, 'view_laudos')) return <Navigate to="/visao-geral" replace />;
   if (!can(cargoTipo, 'create_laudo')) {
-    return <Page title="Novo laudo"><Alert error="Somente a Gestão Técnica pode abrir um laudo." /></Page>;
+    return <Page title="Laudo"><Alert error="Somente a Gestão Técnica pode abrir um laudo." /></Page>;
   }
 
   async function onSubmit(e) {
@@ -62,7 +61,6 @@ export function LaudoNovoPage() {
         userId: session.user.id,
         chamadoId: form.chamado_id,
         descricao: form.descricao,
-        criticidade: form.criticidade,
         files,
       });
       navigate(`/governanca-tecnica/${laudo.id}`);
@@ -74,7 +72,7 @@ export function LaudoNovoPage() {
   }
 
   return (
-    <Page title="Novo laudo" lead="Vincule o laudo a um chamado deste condomínio. O acompanhamento fica entre Gestão Técnica e Construtora.">
+    <Page title="Laudo" lead="Vincule o laudo a um chamado deste condomínio. O acompanhamento fica entre Gestão Técnica e Construtora.">
       <Alert error={error} />
       <form className="panel stack" onSubmit={onSubmit}>
         <Field label="Chamado relacionado">
@@ -88,17 +86,6 @@ export function LaudoNovoPage() {
               <option key={c.id} value={c.id}>
                 {labelUnidade(c.unidades, 'Unidade')} · {chamadoNumero(c.numero_registro)}
               </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Grau de criticidade">
-          <select
-            value={form.criticidade}
-            onChange={(e) => setForm({ ...form, criticidade: e.target.value })}
-            required
-          >
-            {CRITICIDADE_LAUDO.map((item) => (
-              <option key={item.id} value={item.id}>{item.label}</option>
             ))}
           </select>
         </Field>

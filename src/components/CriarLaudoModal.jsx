@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSession } from '../lib/session';
 import { chamadoNumero, labelUnidade } from '../lib/format';
-import { CRITICIDADE_LAUDO } from '../lib/permissions';
 import { criarLaudo } from '../lib/api';
 import { Alert, Btn, Field } from './ui';
 import { Modal } from './DataList';
@@ -10,10 +9,7 @@ import { Modal } from './DataList';
 export function CriarLaudoModal({ open, onClose, chamado }) {
   const navigate = useNavigate();
   const { condoId, session } = useSession();
-  const [form, setForm] = useState({
-    descricao: '',
-    criticidade: 'media',
-  });
+  const [form, setForm] = useState({ descricao: '' });
   const [files, setFiles] = useState([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -22,7 +18,7 @@ export function CriarLaudoModal({ open, onClose, chamado }) {
 
   useEffect(() => {
     if (!open) return;
-    setForm({ descricao: '', criticidade: 'media' });
+    setForm({ descricao: '' });
     setFiles([]);
     setError('');
   }, [open, chamado?.id]);
@@ -38,7 +34,6 @@ export function CriarLaudoModal({ open, onClose, chamado }) {
         userId: session.user.id,
         chamadoId: chamado.id,
         descricao: String(form.descricao || '').trim(),
-        criticidade: form.criticidade,
         files,
       });
       onClose?.();
@@ -77,17 +72,6 @@ export function CriarLaudoModal({ open, onClose, chamado }) {
             {chamadoNumero(chamado?.numero_registro)}
           </strong>
         </p>
-        <Field label="Grau de criticidade">
-          <select
-            value={form.criticidade}
-            onChange={(e) => setForm({ ...form, criticidade: e.target.value })}
-            required
-          >
-            {CRITICIDADE_LAUDO.map((item) => (
-              <option key={item.id} value={item.id}>{item.label}</option>
-            ))}
-          </select>
-        </Field>
         <Field label="Descrição">
           <textarea
             value={form.descricao}

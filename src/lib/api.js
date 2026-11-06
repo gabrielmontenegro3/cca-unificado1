@@ -1261,7 +1261,7 @@ export async function enviarArquivoChamado({ chamadoId, condominioId, userId, fi
   return { ...msg, anexos: [await resolverUrlArquivo(arquivo)] };
 }
 
-export async function criarLaudo({ condominioId, userId, chamadoId, titulo, descricao, files, criticidade }) {
+export async function criarLaudo({ condominioId, userId, chamadoId, titulo, descricao, files }) {
   if (!chamadoId) throw new Error('Selecione o chamado relacionado a este laudo.');
 
   const { data: chamado, error: chErr } = await supabase
@@ -1281,7 +1281,6 @@ export async function criarLaudo({ condominioId, userId, chamadoId, titulo, desc
       .join(' · ')
     || chamado.titulo
     || 'Laudo técnico';
-  const grau = String(criticidade || 'media').toLowerCase();
 
   const payload = {
     condominio_id: condominioId,
@@ -1289,20 +1288,13 @@ export async function criarLaudo({ condominioId, userId, chamadoId, titulo, desc
     criado_por: userId,
     titulo: tituloFinal,
     descricao,
-    criticidade: grau,
   };
 
-  let { data: laudo, error } = await supabase
+  const { data: laudo, error } = await supabase
     .from('laudos_tecnicos')
     .insert(payload)
     .select('*')
     .single();
-  if (error && /criticidade/i.test(error.message || '')) {
-    delete payload.criticidade;
-    const retry = await supabase.from('laudos_tecnicos').insert(payload).select('*').single();
-    laudo = retry.data;
-    error = retry.error;
-  }
   if (error) throw error;
 
   const { error: convErr } = await supabase
@@ -1528,13 +1520,6 @@ export async function listarLaudosGlobais() {
   return hidratarCapasLaudos(data || []);
 }
 
-export async function atualizarCriticidadeLaudo(laudoId, criticidade) {
-  const { error } = await supabase
-    .from('laudos_tecnicos')
-    .update({ criticidade: String(criticidade || 'media').toLowerCase() })
-    .eq('id', laudoId);
-  if (error) throw error;
-}
 
 export async function garantirChatLaudo(laudoId, userId) {
   const { data, error } = await supabase.rpc('garantir_chat_laudo', { p_laudo_id: laudoId });
