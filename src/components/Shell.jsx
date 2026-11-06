@@ -222,7 +222,12 @@ export function Shell() {
           </span>
         </div>
         <nav className="side-nav">
-          {groups.map((group) => (
+          {groups.map((group) => (group.direct ? (
+            <NavLink key={group.id} to={group.items[0].to} className="side-nav-action">
+              <Icon name={group.icon} size={18} />
+              {group.label}
+            </NavLink>
+          ) : (
             <NavGroup
               key={group.id}
               group={group}
@@ -231,20 +236,7 @@ export function Shell() {
               playToken={playToken.id === group.id ? playToken.token : 0}
               onToggle={() => toggleGroup(group.id)}
             />
-          ))}
-          {!isConstrutoraOrg ? (
-            <NavLink
-              to={isGestaoTecnica
-                ? `/suporte${condoId ? `?condo=${condoId}` : ''}`
-                : String(cargoTipo || '').toLowerCase() === 'morador'
-                  ? '/assistencia-tecnica'
-                  : '/chamados'}
-              className="side-nav-action"
-            >
-              <Icon name="headset" size={18} />
-              Suporte
-            </NavLink>
-          ) : null}
+          )))}
         </nav>
         {isGestaoTecnica || isConstrutoraOrg ? (
           <div className="side-foot">

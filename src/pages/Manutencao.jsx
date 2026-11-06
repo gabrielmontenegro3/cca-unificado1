@@ -307,7 +307,7 @@ function RegistrarExecucao({ condoId, userId, sistemas, subsistemasDe, onCriarSi
       </header>
       <Alert error={error} ok={ok} />
       <div className="manut-execucao-grid">
-        <Field label="Sistema construtivos">
+        <Field label="Sistemas construtivos">
           <select
             value={criando === 'sistema' ? CRIAR_SISTEMA : form.sistema}
             onChange={(e) => escolherSistema(e.target.value)}

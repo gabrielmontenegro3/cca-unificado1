@@ -203,11 +203,10 @@ export function navGroupsFor(tipo, opts = {}) {
       meuImovel,
       {
         id: 'manutencao',
-        label: 'Manutenção',
+        label: 'Manutenção Preventiva Condominial',
         icon: 'wrench',
         items: [
           { to: '/manutencao', label: 'Execuções', icon: 'wrench' },
-          { to: '/chamados', label: 'Chamados', icon: 'message' },
         ],
       },
       {
@@ -226,6 +225,7 @@ export function navGroupsFor(tipo, opts = {}) {
         label: 'Governança',
         icon: 'clipboard',
         items: [
+          { to: '/chamados', label: 'Chamados', icon: 'message' },
           { to: '/governanca-tecnica', label: 'Governança técnica', icon: 'clipboard' },
         ],
       },
@@ -241,16 +241,30 @@ export function navGroupsFor(tipo, opts = {}) {
         ...(isMorador ? [{ to: '/assistencia-tecnica', label: 'Assistência técnica', icon: 'headset' }] : []),
         ...(isAdminCondo ? [{ to: '/chamados', label: 'Chamados', icon: 'headset' }] : []),
         { to: '/documentos', label: 'Documentos', icon: 'folder' },
-        { to: '/boletins', label: 'Boletins informativos', icon: 'newspaper' },
       ],
     },
     meuImovel,
+    // Link solto (sem submenu), logo abaixo de Meu imóvel.
+    {
+      id: 'boletins',
+      direct: true,
+      label: 'Boletim informativo condominial',
+      icon: 'newspaper',
+      items: [{ to: '/boletins', label: 'Boletim informativo condominial', icon: 'newspaper' }],
+    },
     {
       id: 'manutencao',
-      label: 'Manutenção',
+      label: 'Manutenção Preventiva Condominial',
       icon: 'wrench',
       items: [
         ...(!isMorador ? [{ to: '/manutencao', label: 'Execuções', icon: 'wrench' }] : []),
+      ],
+    },
+    {
+      id: 'assistencia',
+      label: 'Assistência técnica',
+      icon: 'headset',
+      items: [
         ...(isGT ? [{ to: '/chamados', label: 'Chamados', icon: 'message' }] : []),
         ...(isGT ? [{ to: '/rastreabilidade', label: 'Rastreabilidade', icon: 'layers' }] : []),
         ...(isGT ? [{ to: '/agendar-visita', label: 'Agendar visita', icon: 'calendar' }] : []),
