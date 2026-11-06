@@ -9,7 +9,7 @@ import { Icon } from '../components/icons';
 import { EditTelaButton, useEditTela } from '../components/EditTela';
 import { DataList, Modal } from '../components/DataList';
 import { ArquivoPreviewCard } from '../components/ArquivoPreview';
-import { AREA_LOCAL } from '../lib/permissions';
+import { ABRANGENCIA_GARANTIA, AREA_LOCAL } from '../lib/permissions';
 import { areaForLocal, iconForLocal, tipoForLocal } from '../lib/localIcon';
 
 const PRAZO_UNIDADES = [
@@ -34,7 +34,15 @@ const FIELD_LABELS = {
   prazo_unidade: 'Unidade do prazo',
   data_fim: 'Data final da garantia',
   area: 'Área',
+  abrangencia: 'Tipo de garantia',
 };
+
+const SQL_ABRANGENCIA = 'supabase/garantias-abrangencia.sql';
+
+const OPCOES_ABRANGENCIA = [
+  { id: 'usuario', icon: 'home', hint: 'Cobre a unidade do morador (apartamento ou casa).' },
+  { id: 'areas_comuns', icon: 'building', hint: 'Cobre as áreas comuns, sob responsabilidade do condomínio.' },
+];
 
 const FIELD_PLACEHOLDERS = {
   fornecedores: {
@@ -72,7 +80,7 @@ const DETAIL_ALWAYS = {
   fornecedores: ['razao_social', 'nome_fantasia', 'cnpj', 'localizacao'],
   materiais: ['nome', 'prazo_valor', 'data_fim', 'motivos_perda_garantia', 'descricao', 'telefone'],
   locais: ['nome', 'descricao', 'area'],
-  garantias: ['nome', 'prazo_valor', 'data_fim', 'motivos_perda_garantia', 'descricao', 'telefone'],
+  garantias: ['abrangencia', 'nome', 'prazo_valor', 'data_fim', 'motivos_perda_garantia', 'descricao', 'telefone'],
 };
 
 /** Um único cadastro de materiais (= produtos). Sem entidade separada. */
@@ -100,7 +108,7 @@ const CONFIG = {
   },
   garantias: {
     title: 'Garantias',
-    fields: ['nome', 'prazo_valor', 'prazo_unidade', 'data_fim', 'motivos_perda_garantia', 'descricao', 'telefone'],
+    fields: ['abrangencia', 'nome', 'prazo_valor', 'prazo_unidade', 'data_fim', 'motivos_perda_garantia', 'descricao', 'telefone'],
     path: '/garantias',
     createTitle: 'Nova garantia',
     searchHint: 'Pesquisar garantia…',
@@ -155,6 +163,10 @@ async function writeCatalogRow(table, payload, id) {
     lastError = error;
     if (!isMissingColumnError(error)) throw error;
     const col = columnNameFromError(error);
+    // Sem a coluna, o tipo da garantia se perderia em silêncio: pede o SQL.
+    if (col === 'abrangencia' || (!col && /abrangencia/i.test(String(error?.message || '')))) {
+      throw new Error(`Rode o arquivo ${SQL_ABRANGENCIA} no SQL Editor do Supabase e tente de novo.`);
+    }
     if (col && Object.prototype.hasOwnProperty.call(body, col)) {
       delete body[col];
       continue;
@@ -231,6 +243,9 @@ function catalogPayload(table, form, links, { condoId, editing }) {
   }
 
   if (table === 'garantias') {
+    if (!ABRANGENCIA_GARANTIA[form.abrangencia]) {
+      throw new Error('Escolha se é garantia do usuário ou das áreas comuns (condomínio).');
+    }
     if (!links?.fornecedorId) throw new Error('Selecione o fornecedor da garantia.');
     if (!links?.materialId) throw new Error('Selecione o produto da garantia.');
   }
@@ -534,6 +549,13 @@ function catalogTags(table, row) {
   if (table === 'garantias') {
     const prazo = formatPrazo(row.prazo_valor, row.prazo_unidade);
     return [
+      ABRANGENCIA_GARANTIA[row.abrangencia]
+        ? {
+          key: 'abr',
+          icon: row.abrangencia === 'usuario' ? 'home' : 'building',
+          label: row.abrangencia === 'usuario' ? 'Do usuário' : 'Áreas comuns',
+        }
+        : null,
       row.fornecedorNome ? { key: 'forn', icon: 'box', label: row.fornecedorNome } : null,
       row.produtoNome ? { key: 'prod', icon: 'layers', label: row.produtoNome } : null,
       prazo ? { key: 'prazo', icon: 'shield', label: prazo } : null,
@@ -579,6 +601,8 @@ function detailFieldsFor(table, row) {
       value = formatCnpj(value) || '';
     } else if (key === 'area') {
       value = AREA_LOCAL[value] || '';
+    } else if (key === 'abrangencia') {
+      value = ABRANGENCIA_GARANTIA[value] || 'Não definido';
     } else if (String(key).startsWith('telefone')) {
       value = formatTelefone(value) || '';
     } else if (value == null || value === '') {
@@ -937,6 +961,31 @@ function FormField({ table, col, form, setForm }) {
     );
   }
 
+  if (table === 'garantias' && col === 'abrangencia') {
+    return (
+      <Field label={label}>
+        <div className="area-local-options">
+          {OPCOES_ABRANGENCIA.map((opt) => (
+            <label key={opt.id} className={`area-local-option${form.abrangencia === opt.id ? ' is-on' : ''}`}>
+              <input
+                type="radio"
+                name="garantia-abrangencia"
+                value={opt.id}
+                checked={form.abrangencia === opt.id}
+                onChange={() => setForm({ ...form, abrangencia: opt.id })}
+                required
+              />
+              <span>
+                <strong>{ABRANGENCIA_GARANTIA[opt.id]}</strong>
+                <small>{opt.hint}</small>
+              </span>
+            </label>
+          ))}
+        </div>
+      </Field>
+    );
+  }
+
   if (col === 'prazo_unidade') {
     return (
       <Field label={label}>
@@ -1042,6 +1091,7 @@ function GarantiaFormFields({ form, setForm, links, setLinks, options }) {
   const produtos = links.fornecedorId ? produtosDoFornecedor(options, links) : [];
   return (
     <>
+      <FormField table="garantias" col="abrangencia" form={form} setForm={setForm} />
       <FormField table="garantias" col="nome" form={form} setForm={setForm} />
       <Field label="Fornecedor">
         <select
@@ -1574,25 +1624,63 @@ export function CatalogList({ table }) {
         userId={session?.user?.id}
         editable={editable}
       />
-      <div className="catalog-list">
-        <DataList
-          rows={filtered}
-          empty={q ? 'Nenhum registro encontrado.' : 'Nenhum registro.'}
-          getTitle={(row) => listTitle(table, row)}
-          getSubtitle={(row) => listSubtitle(table, row)}
-          getLeading={table === 'fornecedores'
-            ? (row) => (row.logoUrl
-              ? <img src={row.logoUrl} alt="" />
-              : <Icon name="box" size={18} />)
-            : table === 'locais'
-              ? (row) => <Icon name={iconForLocal(row.nome, row.descricao)} size={20} />
-              : table === 'garantias'
-                ? () => <Icon name="shield" size={18} />
+      {table === 'garantias' ? (
+        <>
+          {[
+            ...OPCOES_ABRANGENCIA.map((opt) => ({
+              id: opt.id,
+              titulo: ABRANGENCIA_GARANTIA[opt.id],
+              icon: opt.icon,
+              rows: filtered.filter((row) => row.abrangencia === opt.id),
+            })),
+            {
+              id: 'sem-tipo',
+              titulo: 'Sem tipo definido',
+              icon: 'shield',
+              rows: filtered.filter((row) => !ABRANGENCIA_GARANTIA[row.abrangencia]),
+            },
+          ]
+            .filter((secao) => secao.id !== 'sem-tipo' || secao.rows.length)
+            .map((secao) => (
+              <section key={secao.id} className="catalog-list garantia-secao">
+                <h2 className="garantia-secao-titulo">
+                  <Icon name={secao.icon} size={18} />
+                  {secao.titulo}
+                </h2>
+                {secao.id === 'sem-tipo' ? (
+                  <p className="hint">Edite cada uma e escolha se é do usuário ou das áreas comuns.</p>
+                ) : null}
+                <DataList
+                  rows={secao.rows}
+                  empty={q ? 'Nenhuma garantia encontrada.' : 'Nenhuma garantia cadastrada.'}
+                  getTitle={(row) => listTitle(table, row)}
+                  getSubtitle={(row) => listSubtitle(table, row)}
+                  getLeading={() => <Icon name="shield" size={18} />}
+                  getTags={(row) => catalogTags(table, row)}
+                  onSelect={openRecord}
+                />
+              </section>
+            ))}
+        </>
+      ) : (
+        <div className="catalog-list">
+          <DataList
+            rows={filtered}
+            empty={q ? 'Nenhum registro encontrado.' : 'Nenhum registro.'}
+            getTitle={(row) => listTitle(table, row)}
+            getSubtitle={(row) => listSubtitle(table, row)}
+            getLeading={table === 'fornecedores'
+              ? (row) => (row.logoUrl
+                ? <img src={row.logoUrl} alt="" />
+                : <Icon name="box" size={18} />)
+              : table === 'locais'
+                ? (row) => <Icon name={iconForLocal(row.nome, row.descricao)} size={20} />
                 : undefined}
-          getTags={(row) => catalogTags(table, row)}
-          onSelect={openRecord}
-        />
-      </div>
+            getTags={(row) => catalogTags(table, row)}
+            onSelect={openRecord}
+          />
+        </div>
+      )}
 
       {editable ? (
         <form className="panel stack catalog-form" onSubmit={add}>

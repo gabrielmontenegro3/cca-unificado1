@@ -58,6 +58,12 @@ export const AREA_LOCAL = {
   comum: 'Área comum',
 };
 
+/** Tipo da garantia: do usuário (unidade) ou das áreas comuns (condomínio). */
+export const ABRANGENCIA_GARANTIA = {
+  usuario: 'Garantia do usuário',
+  areas_comuns: 'Garantia das áreas comuns (condomínio)',
+};
+
 export const PERIODICIDADE = {
   diaria: { label: 'Diária', days: 1 },
   semanal: { label: 'Semanal', days: 7 },
@@ -203,7 +209,8 @@ export function navGroupsFor(tipo, opts = {}) {
       meuImovel,
       {
         id: 'manutencao',
-        label: 'Manutenção Preventiva Condominial',
+        direct: true,
+        label: 'Manutenção preventiva das áreas comuns',
         icon: 'wrench',
         items: [
           { to: '/manutencao', label: 'Execuções', icon: 'wrench' },
@@ -254,7 +261,8 @@ export function navGroupsFor(tipo, opts = {}) {
     },
     {
       id: 'manutencao',
-      label: 'Manutenção Preventiva Condominial',
+      direct: true,
+      label: 'Manutenção preventiva das áreas comuns',
       icon: 'wrench',
       items: [
         ...(!isMorador ? [{ to: '/manutencao', label: 'Execuções', icon: 'wrench' }] : []),

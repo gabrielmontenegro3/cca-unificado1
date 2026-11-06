@@ -529,7 +529,7 @@ export function ManutencaoPage() {
 
   return (
     <Page
-      title="Manutenção preventiva condominial"
+      title="Manutenção preventiva das áreas comuns"
       lead="Documento de referência e registro das execuções do condomínio."
       actions={(
         <>
