@@ -153,7 +153,7 @@ export function can(tipo, action) {
     create_ticket: t === 'morador' || t === 'administracao',
     view_maintenance: isStaff(t) || isGestao(t) || t === 'construtora',
     view_chamado_numeros: isStaff(t) || t === 'construtora',
-    manage_boletins: t === 'administrador' || t === 'gestao_tecnica',
+    manage_boletins: t === 'administrador' || t === 'gestao_tecnica' || t === 'administracao',
   };
   return Boolean(map[action]);
 }
