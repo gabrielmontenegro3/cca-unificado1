@@ -307,7 +307,7 @@ function RegistrarExecucao({ condoId, userId, sistemas, subsistemasDe, onCriarSi
       </header>
       <Alert error={error} ok={ok} />
       <div className="manut-execucao-grid">
-        <Field label="Sistema construtivo">
+        <Field label="Sistema construtivos">
           <select
             value={criando === 'sistema' ? CRIAR_SISTEMA : form.sistema}
             onChange={(e) => escolherSistema(e.target.value)}
@@ -330,7 +330,7 @@ function RegistrarExecucao({ condoId, userId, sistemas, subsistemasDe, onCriarSi
           onCancelar={() => setCriando('')}
         />
       ) : null}
-      <Field label="Subsistema">
+      <Field label="Subsistemas">
         <select
           value={criando === 'subsistema' ? CRIAR_SUBSISTEMA : form.subsistema}
           onChange={(e) => escolherSubsistema(e.target.value)}
@@ -529,7 +529,7 @@ export function ManutencaoPage() {
 
   return (
     <Page
-      title="Manutenção preventiva"
+      title="Manutenção preventiva condominial"
       lead="Documento de referência e registro das execuções do condomínio."
       actions={(
         <>
