@@ -223,8 +223,10 @@ export function Shell() {
         </div>
         <nav className="side-nav">
           {groups.map((group) => (group.direct ? (
-            <NavLink key={group.id} to={group.items[0].to} className="side-nav-action">
-              <Icon name={group.icon} size={18} />
+            <NavLink key={group.id} to={group.items[0].to} className="side-nav-action side-nav-direct">
+              <span className="nav-group-icon" aria-hidden="true">
+                <Icon name={group.icon} size={18} />
+              </span>
               {group.label}
             </NavLink>
           ) : (
