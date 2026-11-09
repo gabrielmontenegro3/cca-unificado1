@@ -10827,3 +10827,30 @@ html[data-theme="escuro"] .pizza-legenda li.is-ativa {
     pointer-events: none;
   }
 }
+
+/* Manutenção: reordenar documentos arrastando (mesmo efeito da tela Documentos) */
+.manut-docs-dica { text-align: center; }
+.manut-docs-grid li.is-sortable { cursor: grab; touch-action: none; }
+.manut-docs-grid li.is-sortable button,
+.manut-docs-grid li.is-sortable a { cursor: pointer; touch-action: auto; }
+.manut-docs-grid li.is-placeholder {
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--pine, #2c5c4f) 8%, var(--paper));
+  outline: 2px dashed color-mix(in srgb, var(--pine, #2c5c4f) 70%, var(--line));
+  outline-offset: -2px;
+}
+.manut-docs-grid li.is-placeholder > * { visibility: hidden; }
+.manut-doc-ghost {
+  position: fixed;
+  z-index: 80;
+  display: flex;
+  margin: 0;
+  list-style: none;
+  pointer-events: none;
+  cursor: grabbing;
+  opacity: 0.98;
+  transform: rotate(1.5deg) scale(1.04);
+  transition: none;
+  border-radius: 18px;
+  box-shadow: 0 24px 48px rgba(15, 23, 32, 0.28);
+}

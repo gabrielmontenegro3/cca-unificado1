@@ -32,12 +32,37 @@ async function comUrl(arquivo) {
   return { ...arquivo, url: data?.signedUrl || '' };
 }
 
-function DocumentosManutencao({ condoId, userId, podeAnexar }) {
+function moverItem(lista, de, para) {
+  if (de === para || de < 0 || para < 0 || de >= lista.length || para >= lista.length) return lista;
+  const nova = lista.slice();
+  const [item] = nova.splice(de, 1);
+  nova.splice(para, 0, item);
+  return nova;
+}
+
+function DocumentosManutencao({ condoId, userId, podeAnexar, reordenar }) {
   const [docs, setDocs] = useState([]);
   const [file, setFile] = useState(null);
   const [fileKey, setFileKey] = useState(0);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [ok, setOk] = useState('');
+  // Arrastar (mesmo efeito da tela Documentos): cópia flutuante segue o ponteiro
+  // e o lugar do documento vira um espaço tracejado.
+  const [arrastandoId, setArrastandoId] = useState('');
+  const docsRef = useRef([]);
+  const arrastandoRef = useRef('');
+  const ordemAntesRef = useRef([]);
+  const ghostRef = useRef(null);
+  const offsetRef = useRef(null);
+  const ouvintesRef = useRef(null);
+  docsRef.current = docs;
+
+  useEffect(() => () => {
+    ouvintesRef.current?.();
+    ghostRef.current?.remove();
+    document.body.classList.remove('docs-dragging');
+  }, []);
 
   async function load() {
     if (!condoId) return;
@@ -104,6 +129,148 @@ function DocumentosManutencao({ condoId, userId, podeAnexar }) {
     load();
   }
 
+  async function salvarOrdem(lista, anterior) {
+    const mudaram = lista
+      .map((doc, ordem) => ({ doc, ordem }))
+      .filter(({ doc, ordem }) => anterior[ordem] !== doc.vinculoId);
+    if (!mudaram.length) return;
+    setBusy(true);
+    setError('');
+    setOk('');
+    try {
+      const resultados = await Promise.all(mudaram.map(({ doc, ordem }) => supabase
+        .from('manutencao_documentos')
+        .update({ ordem })
+        .eq('id', doc.vinculoId)));
+      const falha = resultados.find((res) => res.error);
+      if (falha) throw falha.error;
+      setOk('Ordem dos documentos salva.');
+    } catch (err) {
+      setError(mensagemSql(err));
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function calcularInsercao(x, y, idArrastado) {
+    const cards = document.querySelectorAll('.manut-docs-grid > [data-doc-id]');
+    const lista = docsRef.current;
+    let destino = lista.length;
+    for (const el of cards) {
+      const id = el.getAttribute('data-doc-id');
+      if (id === idArrastado) continue;
+      const indice = lista.findIndex((doc) => doc.vinculoId === id);
+      if (indice < 0) continue;
+      const rect = el.getBoundingClientRect();
+      const passou = y > rect.bottom
+        || (y >= rect.top && y <= rect.bottom && x > rect.left + rect.width / 2);
+      if (!passou) {
+        destino = indice;
+        break;
+      }
+      destino = indice + 1;
+    }
+    return destino;
+  }
+
+  function moverNoGrid(fromId, destino) {
+    const lista = docsRef.current;
+    const from = lista.findIndex((doc) => doc.vinculoId === fromId);
+    if (from < 0 || destino == null) return;
+    let to = destino;
+    if (to > from) to -= 1;
+    to = Math.max(0, Math.min(to, lista.length - 1));
+    const nova = moverItem(lista, from, to);
+    if (nova === lista) return;
+    docsRef.current = nova;
+    setDocs(nova);
+  }
+
+  function posicionarGhost(x, y) {
+    const ghost = ghostRef.current;
+    const offset = offsetRef.current;
+    if (!ghost || !offset) return;
+    ghost.style.left = `${x - offset.x}px`;
+    ghost.style.top = `${y - offset.y}px`;
+  }
+
+  function comecarArraste(card, id) {
+    const ghost = card.cloneNode(true);
+    ghost.classList.add('manut-doc-ghost');
+    ghost.removeAttribute('data-doc-id');
+    const rect = card.getBoundingClientRect();
+    ghost.style.width = `${rect.width}px`;
+    ghost.style.height = `${rect.height}px`;
+    document.body.appendChild(ghost);
+    ghostRef.current = ghost;
+    arrastandoRef.current = id;
+    ordemAntesRef.current = docsRef.current.map((doc) => doc.vinculoId);
+    setArrastandoId(id);
+    setOk('');
+    document.body.classList.add('docs-dragging');
+  }
+
+  function atualizarArraste(event) {
+    posicionarGhost(event.clientX, event.clientY);
+    moverNoGrid(arrastandoRef.current, calcularInsercao(event.clientX, event.clientY, arrastandoRef.current));
+  }
+
+  function encerrarArraste() {
+    const anterior = ordemAntesRef.current;
+    ghostRef.current?.remove();
+    ghostRef.current = null;
+    offsetRef.current = null;
+    arrastandoRef.current = '';
+    ordemAntesRef.current = [];
+    document.body.classList.remove('docs-dragging');
+    setArrastandoId('');
+    if (anterior.length) salvarOrdem(docsRef.current, anterior);
+  }
+
+  function prepararArraste(event, id) {
+    if (!reordenar || busy || event.button !== 0) return;
+    // Botões (Visualizar, excluir) e links continuam funcionando normalmente.
+    if (event.target.closest('button, a, input, textarea, select')) return;
+    event.preventDefault();
+    const card = event.currentTarget;
+    const rect = card.getBoundingClientRect();
+    const pointerId = event.pointerId;
+    const inicioX = event.clientX;
+    const inicioY = event.clientY;
+    offsetRef.current = { x: inicioX - rect.left, y: inicioY - rect.top };
+    ouvintesRef.current?.();
+
+    function parar() {
+      window.removeEventListener('pointermove', mover);
+      window.removeEventListener('pointerup', soltar);
+      window.removeEventListener('pointercancel', soltar);
+      ouvintesRef.current = null;
+    }
+
+    function mover(e) {
+      if (e.pointerId !== pointerId) return;
+      if (!arrastandoRef.current) {
+        const dx = e.clientX - inicioX;
+        const dy = e.clientY - inicioY;
+        if ((dx * dx) + (dy * dy) < 36) return;
+        comecarArraste(card, id);
+      }
+      atualizarArraste(e);
+    }
+
+    function soltar(e) {
+      if (e.pointerId !== pointerId) return;
+      parar();
+      if (arrastandoRef.current) encerrarArraste();
+    }
+
+    ouvintesRef.current = parar;
+    window.addEventListener('pointermove', mover);
+    window.addEventListener('pointerup', soltar);
+    window.addEventListener('pointercancel', soltar);
+  }
+
   return (
     <section className="manut-docs">
       <div className="manut-docs-head">
@@ -121,11 +288,22 @@ function DocumentosManutencao({ condoId, userId, podeAnexar }) {
           </form>
         ) : null}
       </div>
-      <Alert error={error} />
+      <Alert error={error} ok={ok} />
+      {reordenar && docs.length > 1 ? (
+        <p className="hint docs-order-hint manut-docs-dica">Segure um documento e solte na posição da ordem.</p>
+      ) : null}
       {docs.length ? (
         <ul className="manut-docs-grid">
           {docs.map((doc) => (
-            <li key={doc.vinculoId}>
+            <li
+              key={doc.vinculoId}
+              data-doc-id={doc.vinculoId}
+              className={[
+                reordenar && docs.length > 1 ? 'is-sortable' : '',
+                arrastandoId === doc.vinculoId ? 'is-placeholder' : '',
+              ].filter(Boolean).join(' ')}
+              onPointerDown={(event) => prepararArraste(event, doc.vinculoId)}
+            >
               <ArquivoPreviewCard
                 arquivo={doc}
                 url={doc.url}
@@ -414,6 +592,11 @@ export function ManutencaoPage() {
   const [error, setError] = useState('');
   const { editable, editing, showEditButton, canRole, toggleEditing } = useEditTela('manage_catalog');
   const registra = podeRegistrar(cargoTipo, isGestaoTecnica);
+  // "Editar tela" também para o síndico/administrador, que cuidam dos documentos desta tela.
+  const [editandoLocal, setEditandoLocal] = useState(false);
+  const mostrarEditarTela = showEditButton || registra;
+  const modoEdicao = showEditButton ? editing : editandoLocal;
+  const alternarEdicao = showEditButton ? toggleEditing : () => setEditandoLocal((v) => !v);
   const ehMorador = String(cargoTipo || '').toLowerCase().trim() === 'morador';
   // Sistemas construtivos: lista padrão + salvos + os que já estão no cronograma.
   const sistemas = useMemo(() => {
@@ -534,13 +717,18 @@ export function ManutencaoPage() {
       actions={(
         <>
           {registra ? <Btn to="/manutencao/relatorio" variant="ghost" icon="file">Relatório</Btn> : null}
-          {showEditButton ? <EditTelaButton editing={editing} onToggle={toggleEditing} /> : null}
+          {mostrarEditarTela ? <EditTelaButton editing={modoEdicao} onToggle={alternarEdicao} /> : null}
         </>
       )}
     >
       <Alert error={error} />
       {registra && avisoSistemas ? <p className="hint">{avisoSistemas}</p> : null}
-      <DocumentosManutencao condoId={condoId} userId={session?.user?.id} podeAnexar={registra} />
+      <DocumentosManutencao
+        condoId={condoId}
+        userId={session?.user?.id}
+        podeAnexar={registra}
+        reordenar={registra && modoEdicao}
+      />
       {registra ? (
         <RegistrarExecucao
           condoId={condoId}
