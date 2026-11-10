@@ -10682,6 +10682,7 @@ html[data-theme="escuro"] .pizza-legenda li.is-ativa {
 }
 .tipo-view-confirm button.is-yes { background: var(--danger); color: #fff; }
 .tipo-view-btn-danger { color: var(--danger); margin-right: auto; }
+.tipo-apto-modal .modal-foot { padding-top: 16px; }
 .tipo-view-excluir {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);

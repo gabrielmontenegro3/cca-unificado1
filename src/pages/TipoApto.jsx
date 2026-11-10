@@ -489,26 +489,29 @@ export function TipoAptoPage() {
     window.open(data.signedUrl, '_blank', 'noopener,noreferrer');
   }
 
+  // Cada botão tem uma key própria: sem isso o React reaproveita o botão
+  // "Editar informações" como "Salvar alterações" (type="submit") no meio do
+  // clique, e o formulário é enviado na hora, voltando para a visualização.
   const rodapeModal = !editable || !aberto ? null : modo === 'editar' ? (
     <>
-      <Btn variant="ghost" onClick={() => setModo('ver')} disabled={busy}>Cancelar</Btn>
-      <Btn type="submit" form="tipo-apto-editar" icon="check" disabled={busy}>
+      <Btn key="editar-cancelar" variant="ghost" onClick={() => setModo('ver')} disabled={busy}>Cancelar</Btn>
+      <Btn key="editar-salvar" type="submit" form="tipo-apto-editar" icon="check" disabled={busy}>
         {busy ? 'Salvando…' : 'Salvar alterações'}
       </Btn>
     </>
   ) : modo === 'excluir' ? (
     <>
-      <Btn variant="ghost" onClick={() => setModo('ver')} disabled={busy}>Cancelar</Btn>
-      <Btn variant="danger" icon="trash" onClick={excluirTipo} disabled={busy}>
+      <Btn key="excluir-cancelar" variant="ghost" onClick={() => setModo('ver')} disabled={busy}>Cancelar</Btn>
+      <Btn key="excluir-confirmar" variant="danger" icon="trash" onClick={excluirTipo} disabled={busy}>
         {busy ? 'Excluindo…' : 'Excluir tipo'}
       </Btn>
     </>
   ) : (
     <>
-      <Btn variant="ghost" icon="trash" onClick={comecarExclusao} disabled={busy} className="tipo-view-btn-danger">
+      <Btn key="ver-excluir" variant="ghost" icon="trash" onClick={comecarExclusao} disabled={busy} className="tipo-view-btn-danger">
         Excluir tipo
       </Btn>
-      <Btn icon="pencil" onClick={comecarEdicao} disabled={busy}>Editar informações</Btn>
+      <Btn key="ver-editar" icon="pencil" onClick={comecarEdicao} disabled={busy}>Editar informações</Btn>
     </>
   );
 
@@ -592,7 +595,7 @@ export function TipoAptoPage() {
       <Modal
         open={Boolean(aberto) && !isMorador}
         title={modo === 'editar' ? `Editar ${aberto?.nome || 'tipo'}` : modo === 'excluir' ? `Excluir ${aberto?.nome || 'tipo'}` : (aberto?.nome || 'Tipo')}
-        className="modal-sheet--wide"
+        className="modal-sheet--wide tipo-apto-modal"
         onClose={fechar}
         footer={rodapeModal}
       >
