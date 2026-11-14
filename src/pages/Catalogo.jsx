@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useArrastarOrdenar } from '../lib/useArrastarOrdenar';
 import { useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useSession } from '../lib/session';
@@ -1317,79 +1318,115 @@ function CatalogEditPanel({
 
 const TELAS_ARQUIVO_PRINCIPAL = new Set(['fornecedores', 'materiais', 'garantias']);
 
+const SQL_ARQUIVOS_TOPO = 'supabase/arquivos-topo-multiplos.sql';
+
 function erroArquivoPrincipal(err) {
   const msg = String(err?.message || err || '');
+  const code = String(err?.code || '');
+  // Chave antiga (um arquivo por tela) ou colunas novas ausentes: falta o SQL de vários arquivos.
+  if (code === '23505' || /duplicate key|catalogo_arquivos_principais.(id|ordem)|column .*(ordem|created_at)/i.test(msg)) {
+    return `Para anexar mais de um arquivo, rode ${SQL_ARQUIVOS_TOPO} no SQL Editor do Supabase e tente de novo.`;
+  }
   if (/catalogo_arquivos_principais|schema cache|does not exist|42P01|PGRST204|PGRST205/i.test(msg)) {
     return 'Rode o arquivo supabase/catalogo-arquivo-principal.sql no SQL Editor do Supabase e tente de novo.';
   }
   return msg || 'Não foi possível concluir.';
 }
 
+const CAMPOS_ARQUIVO_TOPO = 'id, nome_original, storage_path, mime_type, tipo, tamanho_bytes';
+
+/** Arquivos do topo das telas Fornecedores, Materiais e Garantias. Um novo arquivo entra no fim da lista. */
 function ArquivoPrincipalCatalogo({ table, condoId, userId, editable }) {
-  const [url, setUrl] = useState('');
-  const [nome, setNome] = useState('');
-  const [arquivoId, setArquivoId] = useState('');
-  const [arquivoInfo, setArquivoInfo] = useState(null);
-  const [file, setFile] = useState(null);
+  const [arquivos, setArquivos] = useState([]);
+  const [files, setFiles] = useState([]);
   const [error, setError] = useState('');
+  const [aviso, setAviso] = useState('');
   const [busy, setBusy] = useState(false);
   const [fileKey, setFileKey] = useState(0);
 
   async function load() {
     if (!condoId) return;
-    const { data, error: err } = await supabase
+    let { data, error: err } = await supabase
       .from('catalogo_arquivos_principais')
-      .select('arquivo_id, arquivos(id, nome_original, storage_path, mime_type, tipo, tamanho_bytes)')
+      .select(`id, ordem, arquivo_id, arquivos(${CAMPOS_ARQUIVO_TOPO})`)
       .eq('condominio_id', condoId)
       .eq('tela', table)
-      .maybeSingle();
+      .order('ordem')
+      .order('created_at');
+    let antigo = false;
+    if (err && /(id|ordem|created_at).*does not exist|column/i.test(String(err.message || ''))) {
+      antigo = true;
+      ({ data, error: err } = await supabase
+        .from('catalogo_arquivos_principais')
+        .select(`arquivo_id, arquivos(${CAMPOS_ARQUIVO_TOPO})`)
+        .eq('condominio_id', condoId)
+        .eq('tela', table));
+    }
     if (err) {
       setError(erroArquivoPrincipal(err));
-      setUrl('');
+      setArquivos([]);
       return;
     }
-    const arquivo = Array.isArray(data?.arquivos) ? data.arquivos[0] : data?.arquivos;
-    if (!arquivo?.storage_path) {
-      setUrl('');
-      setNome('');
-      setArquivoId('');
-      setArquivoInfo(null);
-      return;
-    }
-    const assinado = await publicOrSignedUrl(arquivo.storage_path);
-    setArquivoId(arquivo.id || data.arquivo_id || '');
-    setNome(arquivo.nome_original || 'Arquivo principal');
-    setUrl(assinado.data?.signedUrl || '');
-    setArquivoInfo(arquivo);
+    setAviso(antigo && editable ? `Para anexar mais de um arquivo nesta tela, rode ${SQL_ARQUIVOS_TOPO} no SQL Editor do Supabase.` : '');
+    const lista = await Promise.all((data || []).map(async (row) => {
+      const arquivo = Array.isArray(row.arquivos) ? row.arquivos[0] : row.arquivos;
+      if (!arquivo?.storage_path) return null;
+      const assinado = await publicOrSignedUrl(arquivo.storage_path);
+      return { ...arquivo, vinculoId: row.id || '', ordem: row.ordem || 0, url: assinado.data?.signedUrl || '' };
+    }));
+    setArquivos(lista.filter(Boolean));
     setError('');
   }
 
-  useEffect(() => { load(); }, [condoId, table]);
+  useEffect(() => { load(); }, [condoId, table, editable]);
 
   async function anexar(e) {
     e.preventDefault();
-    if (!file) return;
+    if (!files.length) return;
+    setBusy(true);
+    setError('');
+    const enviados = [];
+    try {
+      let proxima = arquivos.reduce((max, item) => Math.max(max, (item.ordem || 0) + 1), 0);
+      for (const file of files) {
+        const arquivo = await uploadArquivo({ condominioId: condoId, userId, file, folder: `catalogo/${table}` });
+        enviados.push(arquivo.id);
+        const { error: err } = await supabase.from('catalogo_arquivos_principais').insert({
+          condominio_id: condoId,
+          tela: table,
+          arquivo_id: arquivo.id,
+          ordem: proxima,
+          updated_at: new Date().toISOString(),
+        });
+        if (err) throw err;
+        proxima += 1;
+      }
+      setFiles([]);
+      setFileKey((value) => value + 1);
+      await load();
+    } catch (err) {
+      // Remove só o arquivo que não chegou a ser vinculado.
+      const ultimo = enviados[enviados.length - 1];
+      if (ultimo) await supabase.from('arquivos').delete().eq('id', ultimo);
+      setError(erroArquivoPrincipal(err));
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remover(arquivo) {
+    if (!arquivo?.id) return;
+    if (!window.confirm(`Remover o arquivo “${arquivo.nome_original || 'arquivo'}”?`)) return;
     setBusy(true);
     setError('');
     try {
-      const arquivo = await uploadArquivo({
-        condominioId: condoId,
-        userId,
-        file,
-        folder: `catalogo/${table}`,
-      });
-      const { error: err } = await supabase.from('catalogo_arquivos_principais').upsert({
-        condominio_id: condoId,
-        tela: table,
-        arquivo_id: arquivo.id,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'condominio_id,tela' });
+      const query = supabase.from('catalogo_arquivos_principais').delete();
+      const { error: err } = arquivo.vinculoId
+        ? await query.eq('id', arquivo.vinculoId)
+        : await query.eq('condominio_id', condoId).eq('tela', table).eq('arquivo_id', arquivo.id);
       if (err) throw err;
-      if (arquivoId && arquivoId !== arquivo.id) {
-        await supabase.from('arquivos').delete().eq('id', arquivoId);
-      }
-      setFile(null);
-      setFileKey((value) => value + 1);
+      await supabase.from('arquivos').delete().eq('id', arquivo.id);
       await load();
     } catch (err) {
       setError(erroArquivoPrincipal(err));
@@ -1403,25 +1440,46 @@ function ArquivoPrincipalCatalogo({ table, condoId, userId, editable }) {
   return (
     <section className="catalog-arquivo">
       <div className="catalog-arquivo-head">
-        <h2>Arquivo principal</h2>
+        <h2>{arquivos.length > 1 ? 'Arquivos principais' : 'Arquivo principal'}</h2>
         {editable ? (
           <form className="catalog-arquivo-form" onSubmit={anexar}>
             <input
               key={fileKey}
               type="file"
-              onChange={(e) => setFile(e.target.files?.[0] || null)}
+              multiple
+              onChange={(e) => setFiles([...(e.target.files || [])])}
             />
-            <Btn type="submit" icon="paperclip" disabled={busy || !file}>
-              {busy ? 'Anexando…' : (nome ? 'Substituir' : 'Anexar')}
+            <Btn type="submit" icon="paperclip" disabled={busy || !files.length}>
+              {busy ? 'Anexando…' : (arquivos.length ? 'Adicionar' : 'Anexar')}
             </Btn>
           </form>
         ) : null}
       </div>
       <Alert error={error} />
-      {url && arquivoInfo ? (
-        <div className="catalog-arquivo-previa">
-          <ArquivoPreviewCard arquivo={arquivoInfo} url={url} />
-        </div>
+      {aviso ? <p className="hint">{aviso}</p> : null}
+      {arquivos.length ? (
+        <ul className="catalog-arquivo-lista">
+          {arquivos.map((arquivo) => (
+            <li key={arquivo.vinculoId || arquivo.id} className="catalog-arquivo-previa">
+              <ArquivoPreviewCard
+                arquivo={arquivo}
+                url={arquivo.url}
+                actions={editable ? (
+                  <button
+                    type="button"
+                    className="arquivo-preview-btn arquivo-preview-btn--ghost"
+                    disabled={busy}
+                    onClick={() => remover(arquivo)}
+                    aria-label={`Remover ${arquivo.nome_original || 'arquivo'}`}
+                    title="Remover"
+                  >
+                    <Icon name="trash" size={15} />
+                  </button>
+                ) : null}
+              />
+            </li>
+          ))}
+        </ul>
       ) : (
         <p className="hint catalog-arquivo-vazio">Nenhum arquivo principal anexado.</p>
       )}
@@ -1452,14 +1510,32 @@ export function CatalogList({ table }) {
   const [editLoading, setEditLoading] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deletingBusy, setDeletingBusy] = useState(false);
+  const [locaisSemOrdem, setLocaisSemOrdem] = useState(false);
+  const [okOrdem, setOkOrdem] = useState('');
   const { editable, editing, showEditButton, canRole, toggleEditing } = useEditTela('manage_catalog');
 
   async function load() {
-    const { data, error: err } = await supabase
-      .from(table)
-      .select(selectFor(table))
-      .eq('condominio_id', condoId)
-      .order('nome');
+    function buscar(modo) {
+      const query = supabase
+        .from(table)
+        .select(selectFor(table))
+        .eq('condominio_id', condoId);
+      // Locais: na posição salva (arrastar e soltar); novos sem posição vão para o fim.
+      if (modo === 'ordem') return query.order('ordem', { ascending: true }).order('created_at', { ascending: true });
+      if (modo === 'criacao') return query.order('created_at', { ascending: true }).order('nome');
+      return query.order('nome');
+    }
+    let modo = table === 'locais' ? 'ordem' : 'nome';
+    let { data, error: err } = await buscar(modo);
+    if (err && table === 'locais' && /ordem/i.test(String(err.message || ''))) {
+      modo = 'criacao';
+      ({ data, error: err } = await buscar(modo));
+    }
+    if (err && table === 'locais' && /created_at/i.test(String(err.message || ''))) {
+      modo = 'nome';
+      ({ data, error: err } = await buscar(modo));
+    }
+    if (table === 'locais') setLocaisSemOrdem(modo !== 'ordem');
     if (err) setError(err.message);
     const base = data || [];
     setRows(table === 'fornecedores' ? await withLogoUrls(base) : await anexarVinculosGarantia(table, base));
@@ -1581,6 +1657,34 @@ export function CatalogList({ table }) {
     }
   }
 
+  async function salvarOrdemLocais(lista, idsAntes) {
+    const mudaram = lista.map((row, ordem) => ({ row, ordem })).filter(({ row, ordem }) => idsAntes[ordem] !== row.id);
+    if (!mudaram.length) return;
+    setOkOrdem('');
+    const resultados = await Promise.all(mudaram.map(({ row, ordem }) => supabase
+      .from('locais').update({ ordem }).eq('id', row.id)));
+    const falha = resultados.find((r) => r.error);
+    if (falha) {
+      setError(/ordem/i.test(String(falha.error.message || ''))
+        ? 'Rode o arquivo supabase/locais-ordem.sql no SQL Editor do Supabase e tente de novo.'
+        : falha.error.message);
+      await load();
+      return;
+    }
+    setOkOrdem('Ordem dos locais salva.');
+  }
+
+  const locaisOrdenaveis = table === 'locais' && editable && !q.trim() && !locaisSemOrdem && rows.length > 1;
+  const { arrastandoId, propsItem } = useArrastarOrdenar({
+    itens: rows,
+    setItens: setRows,
+    getId: (row) => row.id,
+    ativo: locaisOrdenaveis,
+    onSoltar: salvarOrdemLocais,
+    // A linha inteira é um botão (abre o local); o arraste começa nela mesma.
+    ignorar: null,
+  });
+
   async function afterEdit() {
     if (!editState?.id) return;
     const fresh = await loadCatalogRow(editState.table, editState.id);
@@ -1664,7 +1768,21 @@ export function CatalogList({ table }) {
         </>
       ) : (
         <div className="catalog-list">
+          {table === 'locais' && editable ? (
+            locaisSemOrdem ? (
+              <p className="hint">Para mudar a ordem dos locais arrastando, rode supabase/locais-ordem.sql no SQL Editor do Supabase.</p>
+            ) : locaisOrdenaveis ? (
+              <>
+                <Alert ok={okOrdem} />
+                <p className="hint docs-order-hint">Segure um local e arraste para mudar a posição. A nova ordem é salva ao soltar.</p>
+              </>
+            ) : null
+          ) : null}
           <DataList
+            getItemProps={table === 'locais' && locaisOrdenaveis ? (row) => ({
+              ...propsItem(row),
+              className: ['arr-ordenavel', arrastandoId === row.id ? 'arr-lugar' : ''].filter(Boolean).join(' '),
+            }) : undefined}
             rows={filtered}
             empty={q ? 'Nenhum registro encontrado.' : 'Nenhum registro.'}
             getTitle={(row) => listTitle(table, row)}

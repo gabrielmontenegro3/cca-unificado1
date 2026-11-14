@@ -218,14 +218,17 @@ export function navGroupsFor(tipo, opts = {}) {
       },
       {
         id: 'materiais',
+        direct: true,
         label: 'Materiais',
         icon: 'layers',
-        items: [
-          { to: '/fornecedores', label: 'Fornecedores', icon: 'box' },
-          { to: '/materiais', label: 'Materiais', icon: 'layers' },
-          { to: '/garantias', label: 'Garantias', icon: 'shield' },
-          { to: '/locais', label: 'Locais', icon: 'map' },
-        ],
+        items: [{ to: '/materiais', label: 'Materiais', icon: 'layers' }],
+      },
+      {
+        id: 'locais',
+        direct: true,
+        label: 'Locais',
+        icon: 'map',
+        items: [{ to: '/locais', label: 'Locais', icon: 'map' }],
       },
       {
         id: 'governanca',
@@ -281,14 +284,17 @@ export function navGroupsFor(tipo, opts = {}) {
     },
     {
       id: 'materiais',
+      direct: true,
       label: 'Materiais',
       icon: 'layers',
-      items: [
-        { to: '/fornecedores', label: 'Fornecedores', icon: 'box' },
-        { to: '/materiais', label: 'Materiais', icon: 'layers' },
-        { to: '/garantias', label: 'Garantias', icon: 'shield' },
-        { to: '/locais', label: 'Locais', icon: 'map' },
-      ],
+      items: [{ to: '/materiais', label: 'Materiais', icon: 'layers' }],
+    },
+    {
+      id: 'locais',
+      direct: true,
+      label: 'Locais',
+      icon: 'map',
+      items: [{ to: '/locais', label: 'Locais', icon: 'map' }],
     },
     {
       id: 'sistema',

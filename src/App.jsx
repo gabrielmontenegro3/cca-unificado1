@@ -8,6 +8,7 @@ import { DocumentosPage, ContatosPage } from './pages/Conteudo';
 import { BoletinsPage } from './pages/Boletins';
 import { CatalogDetail, CatalogList } from './pages/Catalogo';
 import { ManutencaoPage } from './pages/Manutencao';
+import { MateriaisPage } from './pages/Materiais';
 import { RelatorioManutencaoPage } from './pages/RelatorioManutencao';
 import { ChamadoDetalhePage, ChamadoNovoPage, ChamadosPage } from './pages/Chamados';
 import { ChamadoRastreabilidadePage, RastreabilidadeListaPage } from './pages/ChamadoRastreabilidade';
@@ -25,6 +26,7 @@ import { GestaoTecnicaUsuariosPage } from './pages/GestaoTecnicaUsuarios';
 import { ConfiguracoesPage, NotificacoesPage, OnboardingPreferencias } from './pages/Sistema';
 import { GovernancaTecnicaPage } from './pages/GovernancaTecnica';
 import { RecebimentoPage } from './pages/Recebimento';
+import { RecebimentoConstrutoraPage } from './pages/RecebimentoConstrutora';
 import { ManualUsoPage } from './pages/ManualUso';
 import { TipoAptoPage } from './pages/TipoApto';
 import { ConfigCondominioPage, ConfigConstrutoraPage } from './pages/ConfiguracaoGeral';
@@ -203,6 +205,9 @@ export default function App() {
         <Route path="visao-geral" element={<VisaoGeralRoute />} />
         <Route path="meu-imovel" element={<Navigate to="/recebimento" replace />} />
         <Route path="recebimento" element={<RecebimentoPage />} />
+        <Route path="recebimento/:unidadeId" element={<RecebimentoPage />} />
+        <Route path="construtora-recebimento" element={<RecebimentoConstrutoraPage />} />
+        <Route path="construtora-recebimento/:registroId" element={<RecebimentoConstrutoraPage />} />
         <Route path="manual-uso" element={<ManualUsoPage />} />
         <Route path="tipo-apto" element={<Navigate to="/meu-apartamento" replace />} />
         <Route path="meu-apartamento" element={<TipoAptoPage />} />
@@ -211,14 +216,13 @@ export default function App() {
         <Route path="documentos" element={<DocumentosPage />} />
         <Route path="boletins" element={<BoletinsPage />} />
         <Route path="contatos" element={<ContatosPage />} />
-        <Route path="fornecedores" element={<CatalogList table="fornecedores" />} />
-        <Route path="fornecedores/:id" element={<CatalogDetail table="fornecedores" />} />
-        <Route path="materiais" element={<CatalogList table="materiais" />} />
-        <Route path="materiais/:id" element={<CatalogDetail table="materiais" />} />
+        {/* Fornecedores e Garantias agora fazem parte da tela Materiais. */}
+        <Route path="fornecedores/*" element={<Navigate to="/materiais" replace />} />
+        <Route path="materiais" element={<MateriaisPage />} />
+        <Route path="materiais/:id" element={<Navigate to="/materiais" replace />} />
         <Route path="locais" element={<CatalogList table="locais" />} />
         <Route path="locais/:id" element={<CatalogDetail table="locais" />} />
-        <Route path="garantias" element={<CatalogList table="garantias" />} />
-        <Route path="garantias/:id" element={<CatalogDetail table="garantias" />} />
+        <Route path="garantias/*" element={<Navigate to="/materiais" replace />} />
         <Route path="manutencao" element={<ManutencaoPage />} />
         <Route path="manutencao/relatorio" element={<RelatorioManutencaoPage />} />
         <Route path="assistencia-tecnica" element={<ChamadosPage />} />

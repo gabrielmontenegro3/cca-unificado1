@@ -7,6 +7,7 @@ import { SUBSISTEMAS } from '../lib/especificidade';
 import { publicOrSignedUrl, uploadArquivo } from '../lib/api';
 import { addPeriod, hojeISO } from '../lib/format';
 import { carregarSistemasManutencao, mensagemSqlManutencao } from '../lib/manutencaoExecucoes';
+import { useArrastarOrdenar } from '../lib/useArrastarOrdenar';
 import { Alert, Btn, Field, Page } from '../components/ui';
 import { EditTelaButton, useEditTela } from '../components/EditTela';
 import { Icon } from '../components/icons';
@@ -47,23 +48,6 @@ function DocumentosManutencao({ condoId, userId, podeAnexar, reordenar }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [ok, setOk] = useState('');
-  // Arrastar (mesmo efeito da tela Documentos): cópia flutuante segue o ponteiro
-  // e o lugar do documento vira um espaço tracejado.
-  const [arrastandoId, setArrastandoId] = useState('');
-  const docsRef = useRef([]);
-  const arrastandoRef = useRef('');
-  const ordemAntesRef = useRef([]);
-  const ghostRef = useRef(null);
-  const offsetRef = useRef(null);
-  const ouvintesRef = useRef(null);
-  docsRef.current = docs;
-
-  useEffect(() => () => {
-    ouvintesRef.current?.();
-    ghostRef.current?.remove();
-    document.body.classList.remove('docs-dragging');
-  }, []);
-
   async function load() {
     if (!condoId) return;
     const { data, error: err } = await supabase
@@ -153,123 +137,14 @@ function DocumentosManutencao({ condoId, userId, podeAnexar, reordenar }) {
     }
   }
 
-  function calcularInsercao(x, y, idArrastado) {
-    const cards = document.querySelectorAll('.manut-docs-grid > [data-doc-id]');
-    const lista = docsRef.current;
-    let destino = lista.length;
-    for (const el of cards) {
-      const id = el.getAttribute('data-doc-id');
-      if (id === idArrastado) continue;
-      const indice = lista.findIndex((doc) => doc.vinculoId === id);
-      if (indice < 0) continue;
-      const rect = el.getBoundingClientRect();
-      const passou = y > rect.bottom
-        || (y >= rect.top && y <= rect.bottom && x > rect.left + rect.width / 2);
-      if (!passou) {
-        destino = indice;
-        break;
-      }
-      destino = indice + 1;
-    }
-    return destino;
-  }
-
-  function moverNoGrid(fromId, destino) {
-    const lista = docsRef.current;
-    const from = lista.findIndex((doc) => doc.vinculoId === fromId);
-    if (from < 0 || destino == null) return;
-    let to = destino;
-    if (to > from) to -= 1;
-    to = Math.max(0, Math.min(to, lista.length - 1));
-    const nova = moverItem(lista, from, to);
-    if (nova === lista) return;
-    docsRef.current = nova;
-    setDocs(nova);
-  }
-
-  function posicionarGhost(x, y) {
-    const ghost = ghostRef.current;
-    const offset = offsetRef.current;
-    if (!ghost || !offset) return;
-    ghost.style.left = `${x - offset.x}px`;
-    ghost.style.top = `${y - offset.y}px`;
-  }
-
-  function comecarArraste(card, id) {
-    const ghost = card.cloneNode(true);
-    ghost.classList.add('manut-doc-ghost');
-    ghost.removeAttribute('data-doc-id');
-    const rect = card.getBoundingClientRect();
-    ghost.style.width = `${rect.width}px`;
-    ghost.style.height = `${rect.height}px`;
-    document.body.appendChild(ghost);
-    ghostRef.current = ghost;
-    arrastandoRef.current = id;
-    ordemAntesRef.current = docsRef.current.map((doc) => doc.vinculoId);
-    setArrastandoId(id);
-    setOk('');
-    document.body.classList.add('docs-dragging');
-  }
-
-  function atualizarArraste(event) {
-    posicionarGhost(event.clientX, event.clientY);
-    moverNoGrid(arrastandoRef.current, calcularInsercao(event.clientX, event.clientY, arrastandoRef.current));
-  }
-
-  function encerrarArraste() {
-    const anterior = ordemAntesRef.current;
-    ghostRef.current?.remove();
-    ghostRef.current = null;
-    offsetRef.current = null;
-    arrastandoRef.current = '';
-    ordemAntesRef.current = [];
-    document.body.classList.remove('docs-dragging');
-    setArrastandoId('');
-    if (anterior.length) salvarOrdem(docsRef.current, anterior);
-  }
-
-  function prepararArraste(event, id) {
-    if (!reordenar || busy || event.button !== 0) return;
-    // Botões (Visualizar, excluir) e links continuam funcionando normalmente.
-    if (event.target.closest('button, a, input, textarea, select')) return;
-    event.preventDefault();
-    const card = event.currentTarget;
-    const rect = card.getBoundingClientRect();
-    const pointerId = event.pointerId;
-    const inicioX = event.clientX;
-    const inicioY = event.clientY;
-    offsetRef.current = { x: inicioX - rect.left, y: inicioY - rect.top };
-    ouvintesRef.current?.();
-
-    function parar() {
-      window.removeEventListener('pointermove', mover);
-      window.removeEventListener('pointerup', soltar);
-      window.removeEventListener('pointercancel', soltar);
-      ouvintesRef.current = null;
-    }
-
-    function mover(e) {
-      if (e.pointerId !== pointerId) return;
-      if (!arrastandoRef.current) {
-        const dx = e.clientX - inicioX;
-        const dy = e.clientY - inicioY;
-        if ((dx * dx) + (dy * dy) < 36) return;
-        comecarArraste(card, id);
-      }
-      atualizarArraste(e);
-    }
-
-    function soltar(e) {
-      if (e.pointerId !== pointerId) return;
-      parar();
-      if (arrastandoRef.current) encerrarArraste();
-    }
-
-    ouvintesRef.current = parar;
-    window.addEventListener('pointermove', mover);
-    window.addEventListener('pointerup', soltar);
-    window.addEventListener('pointercancel', soltar);
-  }
+  // Arrastar e soltar seguro (sem duplicar), com a mesma animação das outras telas.
+  const { arrastandoId, propsItem } = useArrastarOrdenar({
+    itens: docs,
+    setItens: setDocs,
+    getId: (doc) => doc.vinculoId,
+    ativo: reordenar && !busy,
+    onSoltar: (lista, idsAntes) => salvarOrdem(lista, idsAntes),
+  });
 
   return (
     <section className="manut-docs">
@@ -297,12 +172,11 @@ function DocumentosManutencao({ condoId, userId, podeAnexar, reordenar }) {
           {docs.map((doc) => (
             <li
               key={doc.vinculoId}
-              data-doc-id={doc.vinculoId}
               className={[
                 reordenar && docs.length > 1 ? 'is-sortable' : '',
                 arrastandoId === doc.vinculoId ? 'is-placeholder' : '',
               ].filter(Boolean).join(' ')}
-              onPointerDown={(event) => prepararArraste(event, doc.vinculoId)}
+              {...propsItem(doc)}
             >
               <ArquivoPreviewCard
                 arquivo={doc}

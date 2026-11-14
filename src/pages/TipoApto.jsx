@@ -184,10 +184,6 @@ function TipoVisualizacao({ tipo, editable, busy, onAbrir, onRemoverArquivo, rod
         <header className="tipo-view-head">
           <p>Tipo</p>
           <h2>{tipo.nome}</h2>
-          <div className="tipo-view-chips">
-            <span><Icon name="eye" size={14} />{contagem(imagens.length, 'imagem', 'imagens')}</span>
-            <span><Icon name="file" size={14} />{contagem(documentos.length, 'documento', 'documentos')}</span>
-          </div>
         </header>
         {tipo.descricao ? (
           <p className="tipo-view-desc">{tipo.descricao}</p>
@@ -537,8 +533,7 @@ export function TipoAptoPage() {
           ) : (
             <ul className="tipo-apto-grid">
               {rows.map((row) => {
-                const { imagens, documentos } = separarArquivos(row.arquivos);
-                const capa = imagens[0];
+                const capa = separarArquivos(row.arquivos).imagens[0];
                 return (
                   <li key={row.id}>
                     <button type="button" className="tipo-apto-card" onClick={() => abrirTipo(row)}>
@@ -547,11 +542,7 @@ export function TipoAptoPage() {
                       </span>
                       <span className="tipo-apto-copy">
                         <strong>{row.nome}</strong>
-                        <small>{row.descricao || 'Sem descrição'}</small>
-                        <span className="tipo-view-chips">
-                          <span><Icon name="eye" size={13} />{imagens.length}</span>
-                          <span><Icon name="file" size={13} />{documentos.length}</span>
-                        </span>
+                        {row.descricao ? <small>{row.descricao}</small> : null}
                       </span>
                     </button>
                   </li>

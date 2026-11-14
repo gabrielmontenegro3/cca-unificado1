@@ -80,6 +80,7 @@ export function DataList({
   getTags,
   className = '',
   interactive = true,
+  getItemProps,
 }) {
   if (!rows.length) return <Empty text={empty} />;
 
@@ -116,8 +117,9 @@ export function DataList({
             {clickable ? <Icon name="chevron" size={16} className="data-list-chevron" /> : null}
           </>
         );
+        const itemProps = typeof getItemProps === 'function' ? getItemProps(row) || {} : {};
         return (
-          <li key={getKey(row)}>
+          <li key={getKey(row)} {...itemProps}>
             {clickable ? (
               <button
                 type="button"

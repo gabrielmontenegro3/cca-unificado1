@@ -16,6 +16,7 @@ const GT_TABS = [
 const CONSTRUTORA_TABS = [
   { to: '/', label: 'Condomínios', icon: 'building', match: (path) => path === '/' || path.startsWith('/condominios') },
   { to: '/laudos-globais', label: 'Governança Técnica', icon: 'clipboard', match: (path) => path.startsWith('/laudos-globais') },
+  { to: '/construtora-recebimento', label: 'Recebimento', icon: 'door', match: (path) => path.startsWith('/construtora-recebimento') },
   { to: '/construtora-relatorios', label: 'Relatórios', icon: 'layers', match: (path) => path.startsWith('/construtora-relatorios') },
   { to: '/construtora-indicativos', label: 'Indicativos', icon: 'layout', match: (path) => path.startsWith('/construtora-indicativos') },
 ];

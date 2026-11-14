@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useArrastarOrdenar } from '../lib/useArrastarOrdenar';
 import { supabase } from '../lib/supabase';
 import { useSession } from '../lib/session';
 import { documentoVisivelPara } from '../lib/permissions';
@@ -34,14 +35,8 @@ export function DocumentosPage() {
   const [form, setForm] = useState({ titulo: '', descricao: '', file: null, publico: '' });
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState('');
-  const [dragId, setDragId] = useState('');
   const { editable, editing, showEditButton, toggleEditing } = useEditTela('manage_content');
   const rowsRef = useRef([]);
-  const dragIdRef = useRef('');
-  const ordemAntesRef = useRef('');
-  const ghostRef = useRef(null);
-  const offsetRef = useRef(null);
-  const ouvintesRef = useRef(null);
   const filaOrdemRef = useRef(Promise.resolve());
   const ordemTokenRef = useRef(0);
   const podeOrdenar = editable && !q.trim();
@@ -59,12 +54,6 @@ export function DocumentosPage() {
   }
 
   useEffect(() => { if (condoId) load(); }, [condoId]);
-
-  useEffect(() => () => {
-    ouvintesRef.current?.();
-    ghostRef.current?.remove();
-    document.body.classList.remove('docs-dragging');
-  }, []);
 
   async function add(e) {
     e.preventDefault();
@@ -161,129 +150,23 @@ export function DocumentosPage() {
       });
   }
 
-  function calcularInsercao(x, y, idArrastado) {
-    const cards = document.querySelectorAll('.docs-folder-grid > [data-doc-id]');
-    const lista = rowsRef.current;
-    let destino = lista.length;
-    for (const el of cards) {
-      const id = el.getAttribute('data-doc-id');
-      if (id === idArrastado) continue;
-      const indice = lista.findIndex((row) => row.id === id);
-      if (indice < 0) continue;
-      const rect = el.getBoundingClientRect();
-      const passou = y > rect.bottom
-        || (y >= rect.top && y <= rect.bottom && x > rect.left + rect.width / 2);
-      if (!passou) {
-        destino = indice;
-        break;
-      }
-      destino = indice + 1;
-    }
-    return destino;
-  }
-
-  function posicionarGhost(x, y) {
-    const ghost = ghostRef.current;
-    const offset = offsetRef.current;
-    if (!ghost || !offset) return;
-    ghost.style.left = `${x - offset.x}px`;
-    ghost.style.top = `${y - offset.y}px`;
-  }
-
-  function moverNoGrid(fromId, insertAtDestino) {
-    const lista = [...rowsRef.current];
-    const from = lista.findIndex((row) => row.id === fromId);
-    if (from < 0 || insertAtDestino == null) return;
-    let to = insertAtDestino;
-    if (to > from) to -= 1;
-    to = Math.max(0, Math.min(to, lista.length - 1));
-    if (to === from) return;
-    const [item] = lista.splice(from, 1);
-    lista.splice(to, 0, item);
-    const next = lista.map((row, index) => ({ ...row, ordem: index }));
-    rowsRef.current = next;
-    setRows(next);
-  }
-
-  function comecarArraste(card, id) {
-    const ghost = card.cloneNode(true);
-    ghost.classList.add('docs-folder-ghost');
-    ghost.removeAttribute('data-doc-id');
-    const rect = card.getBoundingClientRect();
-    ghost.style.width = `${rect.width}px`;
-    ghost.style.height = `${rect.height}px`;
-    document.body.appendChild(ghost);
-    ghostRef.current = ghost;
-    dragIdRef.current = id;
-    ordemAntesRef.current = rowsRef.current.map((row) => row.id).join('|');
-    setDragId(id);
-    document.body.classList.add('docs-dragging');
-  }
-
-  function atualizarArraste(event) {
-    posicionarGhost(event.clientX, event.clientY);
-    const destino = calcularInsercao(event.clientX, event.clientY, dragIdRef.current);
-    moverNoGrid(dragIdRef.current, destino);
-  }
-
-  function encerrarArraste() {
-    const mudou = ordemAntesRef.current
-      && ordemAntesRef.current !== rowsRef.current.map((row) => row.id).join('|');
-    const lista = rowsRef.current.slice();
-    ghostRef.current?.remove();
-    ghostRef.current = null;
-    offsetRef.current = null;
-    dragIdRef.current = '';
-    ordemAntesRef.current = '';
-    document.body.classList.remove('docs-dragging');
-    setDragId('');
-    if (mudou) gravarOrdem(lista);
-  }
-
-  function prepararArraste(event, id) {
-    if (!podeOrdenar || event.button !== 0) return;
-    if (event.target.closest('.docs-folder-actions, a, input, textarea, select')) return;
-    event.preventDefault();
-    const card = event.currentTarget;
-    const rect = card.getBoundingClientRect();
-    const pointerId = event.pointerId;
-    const inicioX = event.clientX;
-    const inicioY = event.clientY;
-    offsetRef.current = {
-      x: inicioX - rect.left,
-      y: inicioY - rect.top,
-    };
-    ouvintesRef.current?.();
-
-    function parar() {
-      window.removeEventListener('pointermove', mover);
-      window.removeEventListener('pointerup', soltar);
-      window.removeEventListener('pointercancel', soltar);
-      ouvintesRef.current = null;
-    }
-
-    function mover(e) {
-      if (e.pointerId !== pointerId) return;
-      if (!dragIdRef.current) {
-        const dx = e.clientX - inicioX;
-        const dy = e.clientY - inicioY;
-        if ((dx * dx) + (dy * dy) < 36) return;
-        comecarArraste(card, id);
-      }
-      atualizarArraste(e);
-    }
-
-    function soltar(e) {
-      if (e.pointerId !== pointerId) return;
-      parar();
-      encerrarArraste();
-    }
-
-    ouvintesRef.current = parar;
-    window.addEventListener('pointermove', mover);
-    window.addEventListener('pointerup', soltar);
-    window.addEventListener('pointercancel', soltar);
-  }
+  // Arrastar e soltar seguro (sem duplicar): só muda a posição e salva a ordem.
+  const { arrastandoId, propsItem } = useArrastarOrdenar({
+    itens: rows,
+    setItens: (lista) => {
+      rowsRef.current = lista;
+      setRows(lista);
+    },
+    getId: (row) => row.id,
+    ativo: podeOrdenar,
+    onSoltar: (lista) => {
+      const numerada = lista.map((row, index) => ({ ...row, ordem: index }));
+      rowsRef.current = numerada;
+      setRows(numerada);
+      gravarOrdem(numerada);
+    },
+    ignorar: '.docs-folder-actions, a, input, textarea, select',
+  });
 
   async function excluir(row) {
     if (!editable || !row?.id) return;
@@ -337,10 +220,10 @@ export function DocumentosPage() {
               className={[
                 'docs-folder',
                 podeOrdenar ? 'is-sortable' : '',
-                dragId === row.id ? 'is-placeholder' : '',
+                arrastandoId === row.id ? 'is-placeholder' : '',
               ].filter(Boolean).join(' ')}
               data-doc-id={row.id}
-              onPointerDown={(event) => prepararArraste(event, row.id)}
+              {...propsItem(row)}
             >
               <div className="docs-folder-visual" aria-hidden="true">
                 <span className="docs-folder-tab" />

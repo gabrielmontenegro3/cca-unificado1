@@ -26,7 +26,7 @@ function atalhosPara(cargoTipo) {
       { to: '/manutencao', icon: 'wrench', label: 'Manutenções', hint: 'Agenda preventiva' },
       { to: '/documentos', icon: 'folder', label: 'Documentos', hint: 'Arquivos do empreendimento' },
       { to: '/governanca-tecnica', icon: 'clipboard', label: 'Governança técnica', hint: 'Laudos do condomínio' },
-      { to: '/garantias', icon: 'shield', label: 'Garantias', hint: 'Fornecedor e produto' },
+      { to: '/materiais', icon: 'shield', label: 'Materiais', hint: 'Fornecedores e garantia' },
     ];
   }
   if (can(t, 'manage_traceability')) {
@@ -55,7 +55,7 @@ function atalhosPara(cargoTipo) {
     { to: '/documentos', icon: 'folder', label: 'Documentos', hint: 'Arquivos do empreendimento' },
     { to: '/boletins', icon: 'newspaper', label: 'Boletins', hint: 'Comunicados' },
     { to: '/contatos', icon: 'phone', label: 'Contatos', hint: 'Telefones úteis' },
-    { to: '/garantias', icon: 'shield', label: 'Garantias', hint: 'Fornecedor e produto' },
+    { to: '/materiais', icon: 'shield', label: 'Materiais', hint: 'Fornecedores e garantia' },
   ];
 }
 
