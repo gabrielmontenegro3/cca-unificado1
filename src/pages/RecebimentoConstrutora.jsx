@@ -1,115 +1,145 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useSession } from '../lib/session';
-import { formatDateTime } from '../lib/format';
+import { formatChatTime, formatDate } from '../lib/format';
 import {
-  PAPEL_LABEL,
-  carregarLinhaTempo,
-  enviarMensagemRecebimento,
-  listarChatsRecebimento,
-  mensagemErroRecebimento,
+  carregarChatUnidade,
+  enviarMensagemUnidade,
+  listarChatsRecebimentoGlobal,
+  mensagemErroRecebimentoChat,
 } from '../lib/recebimento';
 import { Alert, Btn, Empty } from '../components/ui';
 import { Icon } from '../components/icons';
 import { GestaoBar } from '../components/GestaoBar';
-import { ChatHeader } from '../components/Chat';
-import { ComposerProblema, GaleriaRecebimento, MensagensProblema } from './Recebimento';
+import { ChatComposer, ChatHeader, ChatMensagem } from '../components/Chat';
+import { SeloRecebimento } from './Recebimento';
 
-/** Construtora: todas as conversas de problemas da vistoria de entrega, de todos os condomínios. */
+function horaDe(valor) {
+  const d = new Date(valor);
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+}
+
+function EventoChatPortal({ registro }) {
+  if (registro.tipo === 'assinatura_entrega') {
+    return (
+      <div className="chat-event rec-evento-ok" role="status">
+        <span className="rec-evento-ok-selo" aria-hidden="true"><Icon name="check" size={18} /></span>
+        <div className="chat-event-copy"><strong>Entrega OK</strong><span>Imóvel entregue sem pendências</span></div>
+        <time>{formatChatTime(registro.data_evento)}</time>
+      </div>
+    );
+  }
+  const vistoria = registro.tipo === 'vistoria_agendada';
+  return (
+    <div className={`chat-event ${vistoria ? 'chat-event--visita rec-evento-vistoria' : 'rec-evento-antigo'}`} role="status">
+      <span className="chat-event-icon" aria-hidden="true"><Icon name={vistoria ? 'calendar' : 'clipboard'} size={20} /></span>
+      <div className="chat-event-copy">
+        <strong>{registro.titulo || (vistoria ? 'Vistoria agendada' : 'Registro')}</strong>
+        {vistoria ? <span>Vistoria em {formatDate(registro.data_evento)} às {horaDe(registro.data_evento)}</span> : registro.descricao ? <span>{registro.descricao}</span> : null}
+      </div>
+      <time>{formatChatTime(registro.created_at || registro.data_evento)}</time>
+    </div>
+  );
+}
+
+/** Construtora: os chats de recebimento (um por unidade) de todos os condomínios. */
 export function RecebimentoConstrutoraPage() {
-  const { registroId } = useParams();
+  const { registroId: unidadeId } = useParams();
   const navigate = useNavigate();
   const { isConstrutoraOrg, isGestaoTecnica, session, selectCondo } = useSession();
   const [chats, setChats] = useState([]);
   const [carregado, setCarregado] = useState(false);
   const [condoFiltro, setCondoFiltro] = useState('');
-  const [situacao, setSituacao] = useState('abertos');
+  const [situacao, setSituacao] = useState('');
   const [q, setQ] = useState('');
   const [error, setError] = useState('');
-  const [registro, setRegistro] = useState(null);
-  const [busy, setBusy] = useState(false);
+  const [itens, setItens] = useState([]);
+  const [texto, setTexto] = useState('');
+  const [sending, setSending] = useState(false);
+  const chatLogRef = useRef(null);
+
+  const aberto = chats.find((c) => c.unidadeId === unidadeId) || null;
 
   async function loadLista() {
     try {
-      setChats(await listarChatsRecebimento());
+      setChats(await listarChatsRecebimentoGlobal());
       setError('');
     } catch (err) {
-      setError(mensagemErroRecebimento(err));
+      setError(mensagemErroRecebimentoChat(err));
     } finally {
       setCarregado(true);
     }
   }
 
-  async function loadChat(id) {
-    if (!id) {
-      setRegistro(null);
-      return;
-    }
-    const resumo = chats.find((c) => c.id === id);
-    if (!resumo) return;
+  async function loadChat(id = unidadeId) {
+    if (!id) { setItens([]); return; }
     try {
-      const linha = await carregarLinhaTempo(resumo.unidade_id);
-      setRegistro({ ...(linha.find((r) => r.id === id) || {}), resumo });
+      setItens(await carregarChatUnidade(id));
     } catch (err) {
-      setError(mensagemErroRecebimento(err));
+      setError(mensagemErroRecebimentoChat(err));
     }
   }
 
   useEffect(() => { loadLista(); }, []);
-  useEffect(() => { loadChat(registroId); }, [registroId, chats]);
+  useEffect(() => { loadChat(unidadeId); }, [unidadeId]);
+  useEffect(() => {
+    if (!unidadeId) return undefined;
+    const t = setInterval(() => { loadChat(unidadeId); loadLista(); }, 20000);
+    return () => clearInterval(t);
+  }, [unidadeId]);
+  useEffect(() => {
+    const el = chatLogRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [itens]);
 
   const condos = useMemo(() => {
-    const mapa = new Map();
-    for (const c of chats) if (c.condominio?.id) mapa.set(c.condominio.id, c.condominio.nome || 'Condomínio');
-    return [...mapa.entries()].sort((a, b) => a[1].localeCompare(b[1], 'pt-BR'));
+    const mapa = new Map(chats.map((c) => [c.condominioId, c.condominio]));
+    return [...mapa.entries()].sort((a, b) => String(a[1]).localeCompare(String(b[1]), 'pt-BR'));
   }, [chats]);
 
-  const filtrados = chats.filter((c) => {
-    if (condoFiltro && c.condominio_id !== condoFiltro) return false;
-    if (situacao === 'abertos' && c.resolvido) return false;
-    if (situacao === 'resolvidos' && !c.resolvido) return false;
-    const texto = `${c.titulo || ''} ${c.rotuloUnidade} ${c.condominio?.nome || ''}`.toLowerCase();
-    return texto.includes(q.trim().toLowerCase());
-  });
+  const filtrados = chats.filter((c) => (!condoFiltro || c.condominioId === condoFiltro)
+    && (!situacao || c.status === situacao)
+    && `${c.rotulo} ${c.condominio} ${c.preview}`.toLowerCase().includes(q.trim().toLowerCase()));
 
   const grupos = useMemo(() => {
     const mapa = new Map();
     for (const c of filtrados) {
-      const key = c.condominio_id || 'sem';
-      if (!mapa.has(key)) mapa.set(key, { id: key, nome: c.condominio?.nome || 'Condomínio', items: [] });
-      mapa.get(key).items.push(c);
+      if (!mapa.has(c.condominioId)) mapa.set(c.condominioId, { id: c.condominioId, nome: c.condominio, items: [] });
+      mapa.get(c.condominioId).items.push(c);
     }
     return [...mapa.values()].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
   }, [filtrados]);
 
-  async function enviar({ texto, files }) {
-    if (!registro?.id) return false;
-    setBusy(true);
-    setError('');
+  async function enviar(e) {
+    e.preventDefault();
+    if (!aberto || !texto.trim() || sending) return;
+    setSending(true);
     try {
-      await enviarMensagemRecebimento({
-        registroId: registro.id,
-        condominioId: registro.condominio_id,
-        userId: session.user.id,
-        texto,
-        files,
-      });
-      await loadLista();
-      return true;
+      await enviarMensagemUnidade({ unidadeId: aberto.unidadeId, condominioId: aberto.condominioId, userId: session.user.id, texto });
+      setTexto('');
+      await Promise.all([loadChat(), loadLista()]);
     } catch (err) {
-      setError(mensagemErroRecebimento(err));
-      return false;
+      setError(mensagemErroRecebimentoChat(err));
     } finally {
-      setBusy(false);
+      setSending(false);
+    }
+  }
+
+  async function enviarArquivo(file) {
+    if (!aberto || !file) return;
+    setSending(true);
+    try {
+      await enviarMensagemUnidade({ unidadeId: aberto.unidadeId, condominioId: aberto.condominioId, userId: session.user.id, texto: '', files: [file] });
+      await Promise.all([loadChat(), loadLista()]);
+    } catch (err) {
+      setError(mensagemErroRecebimentoChat(err));
+    } finally {
+      setSending(false);
     }
   }
 
   if (!isConstrutoraOrg && !isGestaoTecnica) {
-    return (
-      <div className="portal">
-        <Alert error="Somente a construtora acessa esta tela." />
-      </div>
-    );
+    return <div className="portal"><Alert error="Somente a construtora acessa esta tela." /></div>;
   }
 
   return (
@@ -118,7 +148,7 @@ export function RecebimentoConstrutoraPage() {
       <main className="portal-main wide">
         <div className="page-head">
           <h1>Recebimento</h1>
-          <p>Problemas encontrados pela Gestão Técnica nas vistorias de entrega. Cada problema é uma conversa.</p>
+          <p>Chats da vistoria de entrega com a Gestão Técnica, um por unidade.</p>
         </div>
         <Alert error={error} />
         <div className="row" style={{ marginBottom: 16 }}>
@@ -127,77 +157,78 @@ export function RecebimentoConstrutoraPage() {
             {condos.map(([id, nome]) => <option key={id} value={id}>{nome}</option>)}
           </select>
           <select value={situacao} onChange={(e) => setSituacao(e.target.value)}>
-            <option value="abertos">Em aberto</option>
-            <option value="resolvidos">Resolvidos</option>
-            <option value="">Todos</option>
+            <option value="">Todas as situações</option>
+            <option value="chat">Em andamento</option>
+            <option value="ok">OK</option>
           </select>
           <label className="search-field">
             <Icon name="search" size={16} />
-            <input placeholder="Pesquisar problema, unidade ou condomínio" value={q} onChange={(e) => setQ(e.target.value)} />
+            <input placeholder="Pesquisar unidade ou condomínio" value={q} onChange={(e) => setQ(e.target.value)} />
           </label>
         </div>
 
         <div className="suporte-layout">
-          <aside className="panel suporte-list">
-            {carregado && !grupos.length ? <Empty text="Nenhum problema de recebimento." /> : grupos.map((grupo) => (
+          <aside className="panel suporte-list rec-lista">
+            {carregado && !grupos.length ? <Empty text="Nenhum chat de recebimento ainda." /> : grupos.map((grupo) => (
               <section className="suporte-group" key={grupo.id}>
                 {!condoFiltro ? <h3>{grupo.nome}</h3> : null}
                 {grupo.items.map((c) => (
                   <button
                     type="button"
-                    key={c.id}
-                    className={`suporte-item rec-chat-item${c.id === registroId ? ' active' : ''}`}
-                    onClick={() => navigate(`/construtora-recebimento/${c.id}`)}
+                    key={c.unidadeId}
+                    className={`suporte-item rec-item is-${c.status}${c.unidadeId === unidadeId ? ' active' : ''}`}
+                    onClick={() => navigate(`/construtora-recebimento/${c.unidadeId}`)}
                   >
-                    <span className={`rec-chat-item-dot${c.resolvido ? ' is-ok' : ''}`} aria-hidden="true" />
-                    <span className="rec-chat-item-copy">
-                      <strong className="suporte-item-name">{c.titulo || 'Problema'}</strong>
-                      <small className="suporte-item-preview">
-                        {c.rotuloUnidade}
-                        {c.ultimaMensagem
-                          ? ` · ${PAPEL_LABEL[c.ultimaMensagem.autor_papel] || 'Mensagem'}: ${c.ultimaMensagem.texto}`
-                          : ' · Sem mensagens'}
-                      </small>
-                    </span>
+                    <div className="suporte-item-top">
+                      <strong className="suporte-item-name rec-item-nome">
+                        {c.status === 'ok' ? <span className="rec-item-check" aria-hidden="true"><Icon name="check" size={12} /></span> : null}
+                        {c.rotulo}
+                      </strong>
+                      <SeloRecebimento status={c.status} />
+                    </div>
+                    <small className="suporte-item-preview">{c.preview || 'Vistoria agendada'}</small>
                   </button>
                 ))}
               </section>
             ))}
           </aside>
 
-          <section className={`chat-shell suporte-chat rec-chat-painel${registro?.id ? '' : ' empty'}`}>
-            {!registro?.id ? (
-              <Empty text="Selecione um problema para conversar." />
+          <section className={`chat-shell suporte-chat${aberto ? '' : ' empty'}`}>
+            {!aberto ? (
+              <Empty text="Selecione uma unidade para abrir o chat." />
             ) : (
               <>
-                <ChatHeader
-                  icon="alert"
-                  title={registro.titulo || 'Problema'}
-                  subtitle={`${registro.resumo.rotuloUnidade} · ${registro.resumo.condominio?.nome || ''} · ${registro.resolvido ? 'Resolvido' : 'Em aberto'}`}
-                >
-                  <Btn
-                    variant="ghost"
-                    icon="layers"
-                    onClick={() => {
-                      selectCondo(registro.condominio_id);
-                      navigate(`/recebimento/${registro.unidade_id}`);
-                    }}
-                  >
-                    Linha do tempo
-                  </Btn>
-                </ChatHeader>
-                <div className="chat-log rec-chat-log">
-                  <article className="rec-chat-abertura">
-                    <header>
-                      <strong>Problema registrado</strong>
-                      <time>{formatDateTime(registro.data_evento)}</time>
-                    </header>
-                    {registro.descricao ? <p>{registro.descricao}</p> : null}
-                    <GaleriaRecebimento arquivos={registro.arquivos} />
-                  </article>
-                  <MensagensProblema mensagens={registro.mensagens} sessionUserId={session?.user?.id} />
+                <div className="chat-top">
+                  <ChatHeader icon="door" title={aberto.rotulo} subtitle={aberto.condominio}>
+                    <SeloRecebimento status={aberto.status} />
+                    <Btn
+                      variant="ghost"
+                      icon="building"
+                      onClick={() => { selectCondo(aberto.condominioId); navigate(`/recebimento/${aberto.unidadeId}`); }}
+                    >
+                      Abrir no condomínio
+                    </Btn>
+                  </ChatHeader>
                 </div>
-                <ComposerProblema busy={busy} placeholder="Escreva para a Gestão Técnica" onEnviar={enviar} />
+                <div className="chat-log" ref={chatLogRef}>
+                  {!itens.length ? <Empty text="Nenhuma mensagem ainda." /> : itens.map((item) => (item.kind === 'msg' ? (
+                    <ChatMensagem
+                      key={item.id}
+                      mensagem={item.mensagem}
+                      mine={item.mensagem.usuario_id === session?.user?.id}
+                      quando={formatChatTime(item.at)}
+                      mostrarNome
+                    />
+                  ) : <EventoChatPortal key={item.id} registro={item.registro} />))}
+                </div>
+                <ChatComposer
+                  value={texto}
+                  onChange={setTexto}
+                  sending={sending}
+                  onSend={enviar}
+                  onFile={enviarArquivo}
+                  placeholder="Escreva para a Gestão Técnica"
+                />
               </>
             )}
           </section>

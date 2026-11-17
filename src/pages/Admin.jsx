@@ -3,7 +3,8 @@ import { useSearchParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useSession } from '../lib/session';
 import { CARGO_LABEL } from '../lib/permissions';
-import { criarConvite, criarLoginSemTrocarSessao, definirTipoApartamentoUsuario, definirTipoConvite, listarConvites, listarUsuariosCondominio, vincularUsuario } from '../lib/api';
+import { criarConvite, criarLoginSemTrocarSessao, listarConvites, listarUsuariosCondominio, vincularUsuario } from '../lib/api';
+import { tiposDosMoradores } from '../lib/tipoPorUnidade';
 import { copiarTexto } from '../lib/parseSeed';
 import { conviteUrl } from '../lib/branding';
 import { formatDateTime } from '../lib/format';
@@ -132,17 +133,13 @@ function UnidadeFields({ value, onChange, required, tipo = null }) {
   );
 }
 
-function TipoAptoField({ tipos, value, onChange }) {
-  if (!tipos.length) {
-    return <p className="hint">Cadastre os tipos em Meu apartamento para vincular o morador.</p>;
-  }
+/** O tipo de apartamento vem da unidade (Meu apto → Tipo de cada unidade). */
+function TipoAptoAviso({ tipos }) {
+  if (!tipos.length) return null;
   return (
-    <Field label="Tipo de apartamento">
-      <select value={value} onChange={(e) => onChange(e.target.value)} required>
-        <option value="">Selecione o tipo</option>
-        {tipos.map((tipo) => <option key={tipo.id} value={tipo.id}>{tipo.nome}</option>)}
-      </select>
-    </Field>
+    <p className="hint">
+      O tipo de apartamento vem da unidade: o morador recebe o tipo definido em Meu apto → Tipo de cada unidade.
+    </p>
   );
 }
 
@@ -190,14 +187,11 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
       .eq('condominio_id', condoId)
       .order('ordem');
     setTiposApto(tipos.error ? [] : (tipos.data || []));
-    const vinculos = await supabase
-      .from('usuario_condominio')
-      .select('usuario_id, tipos_apartamento(nome)')
-      .eq('condominio_id', condoId);
-    const tipoPorUsuario = Object.fromEntries((vinculos.data || []).map((row) => {
-      const tipo = Array.isArray(row.tipos_apartamento) ? row.tipos_apartamento[0] : row.tipos_apartamento;
-      return [row.usuario_id, tipo?.nome || ''];
-    }));
+    const nomeTipo = Object.fromEntries((tipos.data || []).map((t) => [t.id, t.nome]));
+    const tipoIdPorUsuario = await tiposDosMoradores(condoId).catch(() => ({}));
+    const tipoPorUsuario = Object.fromEntries(
+      Object.entries(tipoIdPorUsuario).map(([usuarioId, tipoId]) => [usuarioId, nomeTipo[tipoId] || '']),
+    );
     try {
       const lista = await listarUsuariosCondominio(condoId);
       setRows(lista.map((row) => ({ ...row, tipoNome: tipoPorUsuario[row.usuario_id] || '' })));
@@ -230,9 +224,6 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
       const erroUnidade = ehMorador ? validarUnidade(createForm.unidade, tipoUnidade) : '';
       if (erroUnidade) throw new Error(erroUnidade);
       const unidadeTexto = ehMorador ? montarUnidadeTexto(unidadeDoTipo(createForm.unidade, tipoUnidade)) : null;
-      if (ehMorador && tiposApto.length && !createForm.tipoAptoId) {
-        throw new Error('Selecione o tipo de apartamento.');
-      }
 
       let userId = null;
       try {
@@ -245,7 +236,7 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
         const msg = String(err.message || '');
         if (!/already|registered|exists|já|limitou o e-mail|rate_limit/i.test(msg)) throw err;
       }
-      const vinculado = await vincularUsuario({
+      await vincularUsuario({
         condominioId: condoId,
         cargo: createForm.cargo,
         usuarioId: userId,
@@ -253,14 +244,6 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
         unidadeTexto,
         nome: createForm.nome,
       });
-      const usuarioVinculado = userId || vinculado;
-      if (ehMorador && createForm.tipoAptoId && usuarioVinculado) {
-        await definirTipoApartamentoUsuario({
-          condominioId: condoId,
-          usuarioId: usuarioVinculado,
-          tipoId: createForm.tipoAptoId,
-        });
-      }
       setCreateForm({ nome: '', email: '', password: '', cargo: 'morador', unidade: { ...EMPTY_UNIDADE }, tipoAptoId: '' });
       setOk('Usuário criado e vinculado a este condomínio.');
       await load();
@@ -281,9 +264,6 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
       const erroUnidade = ehMorador ? validarUnidade(inviteForm.unidade, tipoUnidade) : '';
       if (erroUnidade) throw new Error(erroUnidade);
       const unidadeTexto = ehMorador ? montarUnidadeTexto(unidadeDoTipo(inviteForm.unidade, tipoUnidade)) : null;
-      if (ehMorador && tiposApto.length && !inviteForm.tipoAptoId) {
-        throw new Error('Selecione o tipo de apartamento.');
-      }
 
       const token = await criarConvite({
         condominioId: condoId,
@@ -291,9 +271,6 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
         email: inviteForm.email,
         unidadeTexto,
       });
-      if (ehMorador && inviteForm.tipoAptoId) {
-        await definirTipoConvite({ token, tipoId: inviteForm.tipoAptoId });
-      }
       const url = conviteUrl(token);
       setLink(url);
       await copiarTexto(url);
@@ -388,11 +365,7 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
                       tipo={tipoUnidade}
                       required
                     />
-                    <TipoAptoField
-                      tipos={tiposApto}
-                      value={createForm.tipoAptoId}
-                      onChange={(tipoAptoId) => setCreateForm({ ...createForm, tipoAptoId })}
-                    />
+                    <TipoAptoAviso tipos={tiposApto} />
                   </>
                 ) : null}
                 <Btn type="submit" icon="user" disabled={busy}>{busy ? 'Salvando…' : 'Criar usuário'}</Btn>
@@ -421,11 +394,7 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
                       tipo={tipoUnidade}
                       required
                     />
-                    <TipoAptoField
-                      tipos={tiposApto}
-                      value={inviteForm.tipoAptoId}
-                      onChange={(tipoAptoId) => setInviteForm({ ...inviteForm, tipoAptoId })}
-                    />
+                    <TipoAptoAviso tipos={tiposApto} />
                   </>
                 ) : null}
                 <Btn type="submit" icon="copy" disabled={busy}>{busy ? 'Gerando…' : 'Gerar e copiar link'}</Btn>

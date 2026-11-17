@@ -217,7 +217,8 @@ export default function App() {
         <Route path="boletins" element={<BoletinsPage />} />
         <Route path="contatos" element={<ContatosPage />} />
         {/* Fornecedores e Garantias agora fazem parte da tela Materiais. */}
-        <Route path="fornecedores/*" element={<Navigate to="/materiais" replace />} />
+        <Route path="fornecedores" element={<CatalogList table="fornecedores" />} />
+        <Route path="fornecedores/:id" element={<CatalogDetail table="fornecedores" />} />
         <Route path="materiais" element={<MateriaisPage />} />
         <Route path="materiais/:id" element={<Navigate to="/materiais" replace />} />
         <Route path="locais" element={<CatalogList table="locais" />} />

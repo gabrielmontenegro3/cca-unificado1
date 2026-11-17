@@ -8,6 +8,15 @@ import { EditTelaButton, useEditTela } from '../components/EditTela';
 import { Modal } from '../components/DataList';
 import { Icon } from '../components/icons';
 import { formatarTamanho } from '../components/ArquivoPreview';
+import { useArrastarOrdenar } from '../lib/useArrastarOrdenar';
+import {
+  carregarRegrasFinais,
+  carregarUnidadesComTipo,
+  mensagemErroTipoPorUnidade,
+  tipoDoMorador,
+  tipoEfetivo,
+} from '../lib/tipoPorUnidade';
+import { TiposPorUnidadeModal, resumoTipos } from './TiposPorUnidade';
 
 function mensagemErro(err) {
   const msg = String(err?.message || err || '');
@@ -77,14 +86,35 @@ function ExcluirComConfirmacao({ busy, onConfirm, rotulo = 'Excluir', compacto =
   );
 }
 
-function Galeria({ imagens, nome, editable, busy, onRemover }) {
-  const [indice, setIndice] = useState(0);
-  const total = imagens.length;
-  const atual = imagens[Math.min(indice, Math.max(total - 1, 0))] || null;
+/** Lista local que acompanha a de fora, mas pode ser reordenada arrastando. */
+function useListaLocal(origem) {
+  const [lista, setLista] = useState(origem);
+  const chave = origem.map((a) => a.vinculoId || a.id).join('|');
+  const origemRef = useRef(origem);
+  origemRef.current = origem;
+  // Só troca quando muda o conjunto/ordem de arquivos (não a cada renderização).
+  useEffect(() => { setLista(origemRef.current); }, [chave]);
+  return [lista, setLista];
+}
 
-  useEffect(() => {
-    if (indice > total - 1) setIndice(Math.max(total - 1, 0));
-  }, [total, indice]);
+const idArquivo = (arquivo) => arquivo.vinculoId || arquivo.id;
+
+function Galeria({ imagens, nome, editable, busy, onRemover, onReordenar }) {
+  const [lista, setLista] = useListaLocal(imagens);
+  const [atualId, setAtualId] = useState('');
+  const total = lista.length;
+  const indice = Math.max(0, lista.findIndex((a) => idArquivo(a) === atualId));
+  const atual = lista[indice] || null;
+  const ordenavel = editable && total > 1 && !busy;
+  const { arrastandoId, propsItem } = useArrastarOrdenar({
+    itens: lista,
+    setItens: setLista,
+    getId: idArquivo,
+    ativo: ordenavel,
+    onSoltar: (nova) => onReordenar?.(nova),
+    // A miniatura inteira é um botão: o arraste começa nela.
+    ignorar: null,
+  });
 
   if (!atual) {
     return (
@@ -96,7 +126,8 @@ function Galeria({ imagens, nome, editable, busy, onRemover }) {
   }
 
   function passo(delta) {
-    setIndice((i) => (i + delta + total) % total);
+    const proximo = lista[(indice + delta + total) % total];
+    if (proximo) setAtualId(idArquivo(proximo));
   }
 
   return (
@@ -123,53 +154,91 @@ function Galeria({ imagens, nome, editable, busy, onRemover }) {
         ) : null}
       </div>
       {total > 1 ? (
-        <div className="tipo-view-thumbs" role="tablist" aria-label="Imagens">
-          {imagens.map((arquivo, i) => (
-            <button
-              key={arquivo.vinculoId || arquivo.id}
-              type="button"
-              role="tab"
-              aria-selected={i === indice}
-              className={`tipo-view-thumb${i === indice ? ' is-on' : ''}`}
-              onClick={() => setIndice(i)}
-            >
-              <img src={arquivo.url} alt="" />
-            </button>
-          ))}
-        </div>
+        <>
+          <div className="tipo-view-thumbs" role="tablist" aria-label="Imagens">
+            {lista.map((arquivo, i) => (
+              <button
+                key={idArquivo(arquivo)}
+                type="button"
+                role="tab"
+                aria-selected={i === indice}
+                className={[
+                  'tipo-view-thumb',
+                  i === indice ? 'is-on' : '',
+                  ordenavel ? 'arr-ordenavel' : '',
+                  arrastandoId === idArquivo(arquivo) ? 'arr-lugar' : '',
+                ].filter(Boolean).join(' ')}
+                onClick={() => setAtualId(idArquivo(arquivo))}
+                {...(ordenavel ? propsItem(arquivo) : {})}
+              >
+                <img src={arquivo.url} alt="" draggable={false} />
+              </button>
+            ))}
+          </div>
+          {ordenavel ? <p className="tipo-view-dica">Arraste as miniaturas para mudar a ordem das imagens.</p> : null}
+        </>
       ) : null}
     </div>
   );
 }
 
-function Documentos({ documentos, editable, busy, onAbrir, onRemover }) {
-  if (!documentos.length) {
+function Documentos({ documentos, editable, busy, onAbrir, onRemover, onReordenar }) {
+  const [lista, setLista] = useListaLocal(documentos);
+  const ordenavel = editable && lista.length > 1 && !busy;
+  const { arrastandoId, propsItem } = useArrastarOrdenar({
+    itens: lista,
+    setItens: setLista,
+    getId: idArquivo,
+    ativo: ordenavel,
+    onSoltar: (nova) => onReordenar?.(nova),
+    // O nome do documento (que abre o arquivo) também serve para arrastar; a lixeira não.
+    ignorar: '.tipo-view-icon-btn, .tipo-view-confirm',
+  });
+  if (!lista.length) {
     return <p className="tipo-view-vazio">Nenhum documento anexado.</p>;
   }
   return (
-    <ul className="tipo-view-docs">
-      {documentos.map((arquivo) => (
-        <li key={arquivo.vinculoId || arquivo.id} className="tipo-view-doc">
-          <button type="button" className="tipo-view-doc-main" onClick={() => onAbrir(arquivo)}>
-            <span className="tipo-view-ext" aria-hidden="true">{extensao(arquivo)}</span>
-            <span className="tipo-view-doc-copy">
-              <strong>{arquivo.nome_original || 'Documento'}</strong>
-              <small>{arquivo.tamanho_bytes ? formatarTamanho(arquivo.tamanho_bytes) : 'Abrir documento'}</small>
-            </span>
-            <Icon name="download" size={16} />
-          </button>
-          {editable ? (
-            <ExcluirComConfirmacao busy={busy} rotulo={`Excluir ${arquivo.nome_original || 'documento'}`} onConfirm={() => onRemover(arquivo)} compacto />
-          ) : null}
-        </li>
-      ))}
-    </ul>
+    <>
+      <ul className="tipo-view-docs">
+        {lista.map((arquivo) => (
+          <li
+            key={idArquivo(arquivo)}
+            className={[
+              'tipo-view-doc',
+              ordenavel ? 'arr-ordenavel' : '',
+              arrastandoId === idArquivo(arquivo) ? 'arr-lugar' : '',
+            ].filter(Boolean).join(' ')}
+            {...(ordenavel ? propsItem(arquivo) : {})}
+          >
+            {ordenavel ? <span className="tipo-view-pegador" aria-hidden="true"><Icon name="menu" size={14} /></span> : null}
+            <button type="button" className="tipo-view-doc-main" onClick={() => onAbrir(arquivo)}>
+              <span className="tipo-view-ext" aria-hidden="true">{extensao(arquivo)}</span>
+              <span className="tipo-view-doc-copy">
+                <strong>{arquivo.nome_original || 'Documento'}</strong>
+                <small>{arquivo.tamanho_bytes ? formatarTamanho(arquivo.tamanho_bytes) : 'Abrir documento'}</small>
+              </span>
+              <Icon name="download" size={16} />
+            </button>
+            {editable ? (
+              <ExcluirComConfirmacao busy={busy} rotulo={`Excluir ${arquivo.nome_original || 'documento'}`} onConfirm={() => onRemover(arquivo)} compacto />
+            ) : null}
+          </li>
+        ))}
+      </ul>
+      {ordenavel ? <p className="tipo-view-dica">Arraste os documentos para mudar a ordem.</p> : null}
+    </>
   );
 }
 
 /** Visualização de um tipo: galeria à esquerda, informações e documentos à direita. */
-function TipoVisualizacao({ tipo, editable, busy, onAbrir, onRemoverArquivo, rodape = null }) {
+function TipoVisualizacao({ tipo, editable, busy, onAbrir, onRemoverArquivo, onReordenarArquivos, rodape = null }) {
   const { imagens, documentos } = separarArquivos(tipo.arquivos);
+  // Ordem final de todos os arquivos: imagens, depois documentos, depois o que sobrar.
+  function juntar(novasImagens, novosDocumentos) {
+    const usados = new Set([...novasImagens, ...novosDocumentos].map(idArquivo));
+    const resto = (tipo.arquivos || []).filter((a) => !usados.has(idArquivo(a)));
+    onReordenarArquivos?.([...novasImagens, ...novosDocumentos, ...resto]);
+  }
   return (
     <div className="tipo-view">
       <Galeria
@@ -179,6 +248,7 @@ function TipoVisualizacao({ tipo, editable, busy, onAbrir, onRemoverArquivo, rod
         editable={editable}
         busy={busy}
         onRemover={onRemoverArquivo}
+        onReordenar={(nova) => juntar(nova, documentos)}
       />
       <div className="tipo-view-info">
         <header className="tipo-view-head">
@@ -198,6 +268,7 @@ function TipoVisualizacao({ tipo, editable, busy, onAbrir, onRemoverArquivo, rod
             busy={busy}
             onAbrir={onAbrir}
             onRemover={onRemoverArquivo}
+            onReordenar={(nova) => juntar(imagens, nova)}
           />
         </section>
         {rodape}
@@ -258,6 +329,8 @@ export function TipoAptoPage() {
   const [edicao, setEdicao] = useState({ nome: '', descricao: '' });
   const [extraFiles, setExtraFiles] = useState([]);
   const [vinculados, setVinculados] = useState(null);
+  const [porUnidadeAberto, setPorUnidadeAberto] = useState(false);
+  const [resumoUnidades, setResumoUnidades] = useState(null);
   const { editable, editing, showEditButton, toggleEditing } = useEditTela('manage_catalog');
   const titulo = labelMeuImovel(tipoUnidade);
 
@@ -268,6 +341,15 @@ export function TipoAptoPage() {
     }));
   }
 
+  async function carregarResumoUnidades() {
+    try {
+      const [unidades, regras] = await Promise.all([carregarUnidadesComTipo(condoId), carregarRegrasFinais(condoId)]);
+      setResumoUnidades(resumoTipos(unidades, regras));
+    } catch (err) {
+      setResumoUnidades({ erro: mensagemErroTipoPorUnidade(err) });
+    }
+  }
+
   async function load() {
     if (!condoId) return;
     const unidades = await supabase.from('unidades').select('identificacao, andar').eq('condominio_id', condoId);
@@ -275,16 +357,12 @@ export function TipoAptoPage() {
 
     let moradorTipo = '';
     if (isMorador && session?.user?.id) {
-      const vinculo = await supabase
-        .from('usuario_condominio')
-        .select('tipo_apartamento_id')
-        .eq('condominio_id', condoId)
-        .eq('usuario_id', session.user.id)
-        .maybeSingle();
-      moradorTipo = vinculo.data?.tipo_apartamento_id || '';
+      // O tipo vem da unidade do morador (regra do final ou exceção da unidade).
+      moradorTipo = await tipoDoMorador(condoId, session.user.id);
       setTipoMoradorId(moradorTipo);
     } else {
       setTipoMoradorId('');
+      carregarResumoUnidades();
     }
 
     let query = supabase
@@ -391,12 +469,21 @@ export function TipoAptoPage() {
     if (!aberto) return;
     setModo('excluir');
     setVinculados(null);
-    const { count } = await supabase
-      .from('usuario_condominio')
-      .select('usuario_id', { count: 'exact', head: true })
-      .eq('condominio_id', condoId)
-      .eq('tipo_apartamento_id', aberto.id);
-    setVinculados(typeof count === 'number' ? count : null);
+    try {
+      const [unidades, regras] = await Promise.all([carregarUnidadesComTipo(condoId), carregarRegrasFinais(condoId)]);
+      const n = unidades.filter((u) => tipoEfetivo(u, regras).tipoId === aberto.id).length;
+      setVinculados({ n, um: 'unidade com este tipo ficará', varios: 'unidades com este tipo ficarão' });
+    } catch {
+      // SQL de tipo por unidade ainda não rodado: conta os moradores com o tipo antigo.
+      const { count } = await supabase
+        .from('usuario_condominio')
+        .select('usuario_id', { count: 'exact', head: true })
+        .eq('condominio_id', condoId)
+        .eq('tipo_apartamento_id', aberto.id);
+      setVinculados(typeof count === 'number'
+        ? { n: count, um: 'morador vinculado ficará', varios: 'moradores vinculados ficarão' }
+        : null);
+    }
   }
 
   async function salvarEdicao(e) {
@@ -436,6 +523,28 @@ export function TipoAptoPage() {
       setError(mensagemErro(err));
     } finally {
       setBusy(false);
+    }
+  }
+
+  /** Salva a nova ordem dos arquivos do tipo aberto (arrastar e soltar). */
+  async function salvarOrdemArquivos(lista) {
+    if (!aberto) return;
+    const anteriores = (aberto.arquivos || []).map((a) => a.vinculoId);
+    // Mostra a nova ordem na hora; o banco é atualizado em seguida.
+    setRows((atual) => atual.map((row) => (row.id === aberto.id ? { ...row, arquivos: lista } : row)));
+    const mudaram = lista
+      .map((arquivo, ordem) => ({ arquivo, ordem }))
+      .filter(({ arquivo, ordem }) => arquivo.vinculoId && anteriores[ordem] !== arquivo.vinculoId);
+    if (!mudaram.length) return;
+    setError('');
+    const resultados = await Promise.all(mudaram.map(({ arquivo, ordem }) => supabase
+      .from('tipo_apartamento_arquivos')
+      .update({ ordem })
+      .eq('id', arquivo.vinculoId)));
+    const falha = resultados.find((r) => r.error);
+    if (falha) {
+      setError(mensagemErro(falha.error));
+      await load();
     }
   }
 
@@ -551,6 +660,29 @@ export function TipoAptoPage() {
             </ul>
           )}
 
+          {editable && rows.length ? (
+            <section className="panel tpu-painel">
+              <span className="tpu-painel-icone" aria-hidden="true"><Icon name="building" size={22} /></span>
+              <div className="tpu-painel-texto">
+                <h2>Tipo de cada {tipoUnidade === 'casas' ? 'casa' : 'unidade'}</h2>
+                {resumoUnidades?.erro ? (
+                  <p className="tpu-painel-erro">{resumoUnidades.erro}</p>
+                ) : resumoUnidades ? (
+                  <p>
+                    {resumoUnidades.comTipo} de {resumoUnidades.total} {resumoUnidades.total === 1 ? 'unidade' : 'unidades'} com tipo
+                    {resumoUnidades.semTipo ? ` · ${resumoUnidades.semTipo} sem tipo` : ''}.
+                    {' '}O morador vê o tipo da unidade dele.
+                  </p>
+                ) : (
+                  <p>Carregando…</p>
+                )}
+              </div>
+              <Btn icon="pencil" onClick={() => setPorUnidadeAberto(true)}>
+                {tipoUnidade === 'casas' ? 'Definir tipos' : 'Definir por final e exceções'}
+              </Btn>
+            </section>
+          ) : null}
+
           {editable ? (
             <form className="panel stack tipo-apto-form" onSubmit={add}>
               <h2>Novo tipo</h2>
@@ -612,7 +744,7 @@ export function TipoAptoPage() {
               <strong>Excluir o tipo {aberto.nome}?</strong>
               <p>
                 {contagem(aberto.arquivos?.length || 0, 'arquivo', 'arquivos')} deste tipo também serão apagados.
-                {vinculados ? ` ${contagem(vinculados, 'morador vinculado ficará', 'moradores vinculados ficarão')} sem tipo.` : ''}
+                {vinculados?.n ? ` ${contagem(vinculados.n, vinculados.um, vinculados.varios)} sem tipo.` : ''}
                 {' '}Não dá para desfazer.
               </p>
             </div>
@@ -622,6 +754,7 @@ export function TipoAptoPage() {
             tipo={aberto}
             editable={editable}
             busy={busy}
+            onReordenarArquivos={salvarOrdemArquivos}
             onAbrir={baixar}
             onRemoverArquivo={excluirArquivo}
             rodape={editable ? (
@@ -642,6 +775,15 @@ export function TipoAptoPage() {
           />
         )}
       </Modal>
+
+      <TiposPorUnidadeModal
+        open={porUnidadeAberto && !isMorador}
+        onClose={() => setPorUnidadeAberto(false)}
+        condoId={condoId}
+        tipos={rows}
+        tipoUnidade={tipoUnidade}
+        onSalvo={carregarResumoUnidades}
+      />
     </Page>
   );
 }

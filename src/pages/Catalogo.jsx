@@ -329,23 +329,6 @@ async function syncPairs(table, fixedCol, fixedId, otherCol, nextIds) {
   }
 }
 
-async function syncFornecedorMateriais(fornecedorId, materialIds) {
-  const wanted = [...new Set((materialIds || []).filter(Boolean))];
-  const { data, error } = await supabase.from('materiais').select('id').eq('fornecedor_id', fornecedorId);
-  if (error) throw error;
-  const current = (data || []).map((row) => row.id);
-  const remove = current.filter((itemId) => !wanted.includes(itemId));
-  const add = wanted.filter((itemId) => !current.includes(itemId));
-  if (remove.length) {
-    const upd = await supabase.from('materiais').update({ fornecedor_id: null }).in('id', remove);
-    if (upd.error) throw upd.error;
-  }
-  if (add.length) {
-    const upd = await supabase.from('materiais').update({ fornecedor_id: fornecedorId }).in('id', add);
-    if (upd.error) throw upd.error;
-  }
-}
-
 function erroOpcional(error) {
   if (!error) return false;
   const code = String(error.code || '');
@@ -415,9 +398,7 @@ async function applyCatalogLinks(table, id, links) {
   if (table === 'locais') {
     await syncPairs('material_locais', 'local_id', id, 'material_id', links.materialIds);
   }
-  if (table === 'fornecedores') {
-    await syncFornecedorMateriais(id, links.materialIds);
-  }
+  // Fornecedores não têm produtos ligados: salvar um fornecedor não mexe nos materiais.
   if (table === 'garantias') {
     await definirVinculoGarantia('fornecedor_garantias', id, 'fornecedor_id', links.fornecedorId);
     await definirVinculoGarantia('material_garantias', id, 'material_id', links.materialId);
@@ -642,45 +623,7 @@ async function loadCatalogRow(tableName, id) {
 async function loadRelatedGroups(table, id) {
   const groups = [];
 
-  if (table === 'fornecedores') {
-    const matsRes = await supabase
-      .from('materiais')
-      .select('id, nome, prazo_valor, prazo_unidade, data_fim')
-      .eq('fornecedor_id', id)
-      .order('nome');
-    const mats = matsRes.data || [];
-
-    const gars = await supabase
-      .from('fornecedor_garantias')
-      .select('garantia_id, garantias(id, nome)')
-      .eq('fornecedor_id', id);
-    groups.push({
-      key: 'garantias',
-      label: 'Garantias',
-      items: (gars.error ? [] : gars.data || [])
-        .map((row) => {
-          const g = Array.isArray(row.garantias) ? row.garantias[0] : row.garantias;
-          if (!g?.id) return null;
-          return { id: g.id, nome: g.nome, to: `/garantias/${g.id}` };
-        })
-        .filter(Boolean),
-    });
-
-    groups.push({
-      key: 'produtos',
-      label: 'Produtos',
-      items: mats.map((row) => {
-        const prazo = formatPrazo(row.prazo_valor, row.prazo_unidade);
-        const fim = row.data_fim ? `até ${formatDate(row.data_fim)}` : '';
-        return {
-          id: row.id,
-          nome: row.nome,
-          sub: [prazo, fim].filter(Boolean).join(' · '),
-          to: `/materiais/${row.id}`,
-        };
-      }),
-    });
-  }
+  // Fornecedores não são ligados a produtos: o detalhe mostra só os dados do cadastro.
 
   if (table === 'materiais') {
     const [locs, mat] = await Promise.all([
@@ -848,7 +791,7 @@ function RelatedItemButton({ item, onOpenRelated }) {
   );
 }
 
-function CatalogDetailView({ fields, relatedGroups, onOpenRelated, logoUrl, iconName }) {
+function CatalogDetailView({ fields, relatedGroups, onOpenRelated, logoUrl, iconName, semAvisoVinculos = false }) {
   return (
     <div className="catalog-detail">
       {logoUrl ? (
@@ -903,7 +846,7 @@ function CatalogDetailView({ fields, relatedGroups, onOpenRelated, logoUrl, icon
             </section>
           ))}
         </div>
-      ) : (
+      ) : semAvisoVinculos ? null : (
         <p className="catalog-related-empty">Nenhum vínculo cadastrado ainda.</p>
       )}
     </div>
@@ -1237,14 +1180,6 @@ function CatalogFormBody({
       {table === 'locais' ? (
         <MultiCheck
           label="Produtos utilizados no local"
-          options={options.materiais}
-          values={links.materialIds}
-          onChange={(materialIds) => setLinks({ ...links, materialIds })}
-        />
-      ) : null}
-      {table === 'fornecedores' ? (
-        <MultiCheck
-          label="Produtos deste fornecedor"
           options={options.materiais}
           values={links.materialIds}
           onChange={(materialIds) => setLinks({ ...links, materialIds })}
@@ -1870,6 +1805,7 @@ export function CatalogList({ table }) {
             onOpenRelated={openRelated}
             logoUrl={selected?.logoUrl}
             iconName={detailTable === 'locais' ? iconForLocal(selected?.nome, selected?.descricao) : ''}
+            semAvisoVinculos={detailTable === 'fornecedores'}
           />
         )}
       </Modal>
@@ -2017,6 +1953,7 @@ export function CatalogDetail({ table }) {
             onOpenRelated={(item) => item?.to && navigate(item.to)}
             logoUrl={row?.logoUrl}
             iconName={table === 'locais' ? iconForLocal(row?.nome, row?.descricao) : ''}
+            semAvisoVinculos={table === 'fornecedores'}
           />
         )}
       </Modal>

@@ -224,6 +224,13 @@ export function navGroupsFor(tipo, opts = {}) {
         items: [{ to: '/materiais', label: 'Materiais', icon: 'layers' }],
       },
       {
+        id: 'fornecedores',
+        direct: true,
+        label: 'Fornecedores',
+        icon: 'box',
+        items: [{ to: '/fornecedores', label: 'Fornecedores', icon: 'box' }],
+      },
+      {
         id: 'locais',
         direct: true,
         label: 'Locais',
@@ -288,6 +295,13 @@ export function navGroupsFor(tipo, opts = {}) {
       label: 'Materiais',
       icon: 'layers',
       items: [{ to: '/materiais', label: 'Materiais', icon: 'layers' }],
+    },
+    {
+      id: 'fornecedores',
+      direct: true,
+      label: 'Fornecedores',
+      icon: 'box',
+      items: [{ to: '/fornecedores', label: 'Fornecedores', icon: 'box' }],
     },
     {
       id: 'locais',

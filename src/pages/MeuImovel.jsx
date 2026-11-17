@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase';
 import { useSession } from '../lib/session';
 import { arquivoEhImagem, publicOrSignedUrl } from '../lib/api';
 import { fichaPreenchida, textosPreenchidos } from '../lib/tipoApto';
+import { tipoDoMorador } from '../lib/tipoPorUnidade';
 import { Alert, Btn, Field, Page } from '../components/ui';
 import { EditTelaButton, useEditTela } from '../components/EditTela';
 
@@ -70,13 +71,8 @@ export function MeuImovelPage() {
       setTipo(null);
       return;
     }
-    const vinculo = await supabase
-      .from('usuario_condominio')
-      .select('tipo_apartamento_id')
-      .eq('condominio_id', condoId)
-      .eq('usuario_id', userId)
-      .maybeSingle();
-    const tipoId = vinculo.data?.tipo_apartamento_id;
+    // O tipo vem da unidade do morador (regra do final ou exceção da unidade).
+    const tipoId = await tipoDoMorador(condoId, userId);
     if (!tipoId) {
       setTipo(null);
       return;

@@ -1,212 +1,86 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useSession } from '../lib/session';
 import { ehCargoConstrutora } from '../lib/permissions';
-import { formatDate, formatDateTime } from '../lib/format';
+import { formatChatTime, formatDate } from '../lib/format';
 import {
-  PAPEL_LABEL,
-  STATUS_UNIDADE,
+  STATUS_CHAT,
   TIPOS_RECEBIMENTO,
-  carregarLinhaTempo,
-  carregarUnidade,
-  criarRegistro,
-  enviarMensagemRecebimento,
-  listarUnidadesRecebimento,
-  marcarProblemaResolvido,
-  mensagemErroRecebimento,
-  statusDaUnidade,
-  tiposPermitidos,
-  tituloRegistro,
+  agendarVistoriaUnidade,
+  carregarChatUnidade,
+  desmarcarUnidadeOk,
+  enviarMensagemUnidade,
+  listarChatsUnidades,
+  marcarUnidadeOk,
+  mensagemErroRecebimentoChat,
   unidadesDoMorador,
 } from '../lib/recebimento';
 import { Alert, Btn, Empty, Field, Page } from '../components/ui';
 import { Modal } from '../components/DataList';
 import { Icon } from '../components/icons';
-import { formatarTamanho } from '../components/ArquivoPreview';
+import { ChatComposer, ChatHeader, ChatMensagem } from '../components/Chat';
 
-/* ---------- Peças visuais ---------- */
+/* ---------- Peças ---------- */
 
-export function StatusEntrega({ status }) {
-  const info = STATUS_UNIDADE[status] || STATUS_UNIDADE.sem_vistoria;
-  return <span className={`rec-status is-${info.tom}`}>{info.label}</span>;
+/** Selo da unidade: nada (sem vistoria), azul (com chat) ou verde com ✓ (OK). */
+export function SeloRecebimento({ status }) {
+  if (status === 'ok') {
+    return (
+      <span className="rec-selo is-ok" title="Entrega OK">
+        <Icon name="check" size={13} />
+        OK
+      </span>
+    );
+  }
+  if (status === 'chat') return <span className="rec-selo is-chat">Em andamento</span>;
+  return <span className="rec-selo">Sem vistoria</span>;
 }
 
-export function GaleriaRecebimento({ arquivos }) {
-  if (!arquivos?.length) return null;
+function horaDe(valor) {
+  const d = new Date(valor);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+}
+
+/** Eventos dentro do chat: vistoria agendada, OK da entrega e registros antigos. */
+function EventoChat({ registro }) {
+  if (registro.tipo === 'vistoria_agendada') {
+    const hora = horaDe(registro.data_evento);
+    return (
+      <div className="chat-event chat-event--visita rec-evento-vistoria" role="status">
+        <span className="chat-event-icon" aria-hidden="true"><Icon name="calendar" size={20} /></span>
+        <div className="chat-event-copy">
+          <strong>{registro.titulo || 'Vistoria agendada'}</strong>
+          <span>Vistoria em {formatDate(registro.data_evento)}{hora ? ` às ${hora}` : ''}</span>
+        </div>
+        <time>{formatChatTime(registro.created_at || registro.data_evento)}</time>
+      </div>
+    );
+  }
+  if (registro.tipo === 'assinatura_entrega') {
+    return (
+      <div className="chat-event rec-evento-ok" role="status">
+        <span className="rec-evento-ok-selo" aria-hidden="true"><Icon name="check" size={18} /></span>
+        <div className="chat-event-copy">
+          <strong>Entrega OK</strong>
+          <span>Imóvel entregue sem pendências{registro.autorNome ? ` · ${registro.autorNome}` : ''}</span>
+        </div>
+        <time>{formatChatTime(registro.data_evento)}</time>
+      </div>
+    );
+  }
+  const meta = TIPOS_RECEBIMENTO[registro.tipo];
   return (
-    <div className="trace-gallery">
-      {arquivos.map((arquivo) => (arquivo.isImage && arquivo.url ? (
-        <figure key={arquivo.id} className="trace-gallery-item">
-          <a href={arquivo.url} target="_blank" rel="noreferrer">
-            <img src={arquivo.url} alt={arquivo.nome_original || 'Foto'} />
-          </a>
-        </figure>
-      ) : arquivo.url ? (
-        <a key={arquivo.id} className="trace-file" href={arquivo.url} target="_blank" rel="noreferrer">
-          <Icon name="file" size={16} />
-          {arquivo.nome_original || 'Arquivo'}
-        </a>
-      ) : null))}
+    <div className="chat-event rec-evento-antigo" role="status">
+      <span className="chat-event-icon" aria-hidden="true"><Icon name={meta?.icon || 'clipboard'} size={18} /></span>
+      <div className="chat-event-copy">
+        <strong>{registro.titulo || meta?.label || 'Registro'}</strong>
+        {registro.descricao ? <span>{registro.descricao}</span> : null}
+      </div>
+      <time>{formatChatTime(registro.data_evento)}</time>
     </div>
   );
 }
-
-function autorDe(item) {
-  const papel = PAPEL_LABEL[item.autor_papel] || '';
-  if (item.autorNome && papel) return `${item.autorNome} · ${papel}`;
-  return item.autorNome || papel;
-}
-
-/** Mensagens do chat de um problema, em ordem, como uma mini linha do tempo. */
-export function MensagensProblema({ mensagens, sessionUserId }) {
-  if (!mensagens?.length) {
-    return <p className="rec-chat-vazio">Nenhuma mensagem ainda.</p>;
-  }
-  return (
-    <ol className="rec-chat-lista">
-      {mensagens.map((m) => (
-        <li
-          key={m.id}
-          className={`rec-msg is-${m.autor_papel || 'outro'}${m.usuario_id === sessionUserId ? ' is-minha' : ''}`}
-        >
-          <header>
-            <strong>{autorDe(m) || 'Mensagem'}</strong>
-            <time dateTime={m.created_at}>{formatDateTime(m.created_at)}</time>
-          </header>
-          {m.texto ? <p>{m.texto}</p> : null}
-          <GaleriaRecebimento arquivos={m.arquivos} />
-        </li>
-      ))}
-    </ol>
-  );
-}
-
-/** Caixa de escrever no chat do problema (texto + anexos). */
-export function ComposerProblema({ onEnviar, busy, placeholder }) {
-  const [texto, setTexto] = useState('');
-  const [files, setFiles] = useState([]);
-  const fileRef = useRef(null);
-
-  async function enviar(e) {
-    e.preventDefault();
-    if (!texto.trim() && !files.length) return;
-    const ok = await onEnviar({ texto, files });
-    if (ok !== false) {
-      setTexto('');
-      setFiles([]);
-      if (fileRef.current) fileRef.current.value = '';
-    }
-  }
-
-  return (
-    <form className="rec-composer" onSubmit={enviar}>
-      {files.length ? (
-        <ul className="rec-composer-arquivos">
-          {files.map((file, i) => (
-            <li key={`${file.name}-${i}`}>
-              <Icon name={String(file.type).startsWith('image/') ? 'eye' : 'file'} size={14} />
-              <span>{file.name}</span>
-              <button type="button" aria-label={`Remover ${file.name}`} onClick={() => setFiles(files.filter((_, j) => j !== i))}>
-                <Icon name="x" size={12} />
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      <div className="rec-composer-linha">
-        <label className="chat-icon-btn" title="Anexar fotos ou arquivos">
-          <input
-            ref={fileRef}
-            type="file"
-            multiple
-            accept="image/*,.pdf"
-            onChange={(e) => setFiles([...files, ...(e.target.files || [])])}
-          />
-          <Icon name="paperclip" />
-        </label>
-        <input
-          className="chat-input"
-          value={texto}
-          onChange={(e) => setTexto(e.target.value)}
-          placeholder={placeholder}
-          disabled={busy}
-          autoComplete="off"
-        />
-        <button className="chat-send" type="submit" disabled={busy || (!texto.trim() && !files.length)} title="Enviar">
-          <Icon name="send" />
-        </button>
-      </div>
-    </form>
-  );
-}
-
-function CartaoRegistro({ registro, podeConversar, podeResolver, busy, sessionUserId, onEnviarMensagem, onResolver }) {
-  const meta = TIPOS_RECEBIMENTO[registro.tipo] || {};
-  const ehProblema = registro.tipo === 'problema';
-  const [chatAberto, setChatAberto] = useState(!registro.resolvido);
-  const quem = autorDe(registro);
-  return (
-    <article className={`trace-card rec-card rec-card--${registro.tipo}${registro.resolvido ? ' is-resolvido' : ''}`}>
-      <header className="trace-card-head">
-        <span className="trace-card-badge">
-          <Icon name={meta.icon || 'clipboard'} size={12} />
-          {meta.curto || 'Registro'}
-        </span>
-        <time dateTime={registro.data_evento}>{formatDateTime(registro.data_evento)}</time>
-      </header>
-      <h3 className="trace-card-title">{tituloRegistro(registro)}</h3>
-      {quem ? <p className="trace-card-meta">Por {quem}</p> : null}
-      {registro.descricao ? <p className="trace-card-text">{registro.descricao}</p> : null}
-      <GaleriaRecebimento arquivos={registro.arquivos} />
-
-      {ehProblema ? (
-        <section className="rec-chat">
-          <div className="rec-chat-head">
-            <button type="button" className="rec-chat-toggle" onClick={() => setChatAberto((v) => !v)} aria-expanded={chatAberto}>
-              <Icon name="message" size={15} />
-              Conversa com a construtora
-              <span className="rec-chat-count">{registro.mensagens.length}</span>
-              <Icon name="chevron" size={14} className={`rec-chat-chevron${chatAberto ? ' is-open' : ''}`} />
-            </button>
-            {registro.resolvido ? (
-              <span className="rec-status is-ok">
-                Resolvido{registro.resolvido_em ? ` em ${formatDate(registro.resolvido_em)}` : ''}
-              </span>
-            ) : (
-              <span className="rec-status is-alerta">Em aberto</span>
-            )}
-          </div>
-          {chatAberto ? (
-            <>
-              <MensagensProblema mensagens={registro.mensagens} sessionUserId={sessionUserId} />
-              {podeConversar ? (
-                <ComposerProblema
-                  busy={busy}
-                  placeholder="Escreva para a construtora / Gestão Técnica"
-                  onEnviar={(dados) => onEnviarMensagem(registro, dados)}
-                />
-              ) : null}
-            </>
-          ) : null}
-          {podeResolver ? (
-            <div className="rec-chat-acoes">
-              <Btn
-                variant="ghost"
-                icon={registro.resolvido ? 'x' : 'check'}
-                disabled={busy}
-                onClick={() => onResolver(registro, !registro.resolvido)}
-              >
-                {registro.resolvido ? 'Reabrir problema' : 'Marcar como resolvido'}
-              </Btn>
-            </div>
-          ) : null}
-        </section>
-      ) : null}
-    </article>
-  );
-}
-
-/* ---------- Modal de novo registro ---------- */
 
 function agoraLocal() {
   const d = new Date();
@@ -214,343 +88,127 @@ function agoraLocal() {
   return d.toISOString().slice(0, 16);
 }
 
-function NovoRegistroModal({ open, tipos, problemasAbertos, temVistoriaAgendada, onClose, onSalvar, busy, modoMorador }) {
-  const [tipo, setTipo] = useState('');
+function AgendarVistoriaModal({ open, unidade, busy, onClose, onSalvar }) {
   const [titulo, setTitulo] = useState('');
-  const [descricao, setDescricao] = useState('');
   const [quando, setQuando] = useState('');
-  const [files, setFiles] = useState([]);
   const [erro, setErro] = useState('');
 
   useEffect(() => {
     if (!open) return;
-    const inicial = tipos.includes('vistoria_agendada') && !temVistoriaAgendada ? 'vistoria_agendada' : tipos[0] || '';
-    setTipo(inicial);
     setTitulo('');
-    setDescricao('');
     setQuando(agoraLocal());
-    setFiles([]);
     setErro('');
   }, [open]);
 
-  const pedeTitulo = tipo === 'problema' || tipo === 'construtora';
-  const assinaturaBloqueada = tipo === 'assinatura_entrega' && problemasAbertos > 0;
-
   async function salvar(e) {
     e.preventDefault();
-    setErro('');
-    if (pedeTitulo && !titulo.trim()) {
-      setErro(tipo === 'problema' ? 'Dê um título ao problema.' : 'Escreva o título do registro.');
-      return;
-    }
-    if ((tipo === 'problema' || tipo === 'vistoria_solicitada') && !descricao.trim()) {
-      setErro('Descreva o que foi encontrado.');
-      return;
-    }
-    if (assinaturaBloqueada) {
-      setErro('Resolva todos os problemas antes de registrar a assinatura de entrega.');
-      return;
-    }
-    await onSalvar({
-      tipo,
-      titulo,
-      descricao,
-      dataEvento: quando ? new Date(quando).toISOString() : null,
-      files,
-    });
+    if (!titulo.trim()) return setErro('Escreva o título da vistoria.');
+    if (!quando) return setErro('Informe a data da vistoria.');
+    await onSalvar({ titulo: titulo.trim(), dataEvento: new Date(quando).toISOString() });
   }
-
-  const tituloModal = modoMorador ? 'Solicitar vistoria' : 'Novo registro';
 
   return (
     <Modal
       open={open}
-      title={tituloModal}
-      onClose={busy ? undefined : onClose}
+      title={`Agendar vistoria${unidade ? ` · ${unidade}` : ''}`}
       className="modal-sheet--trace rec-modal"
+      onClose={busy ? undefined : onClose}
       footer={(
         <>
           <Btn variant="ghost" onClick={onClose} disabled={busy}>Cancelar</Btn>
-          <Btn type="submit" form="rec-novo-registro" icon="check" disabled={busy || assinaturaBloqueada}>
-            {busy ? 'Salvando…' : modoMorador ? 'Enviar solicitação' : 'Registrar'}
-          </Btn>
+          <Btn type="submit" form="rec-agendar" icon="calendar" disabled={busy}>{busy ? 'Salvando…' : 'Agendar'}</Btn>
         </>
       )}
     >
-      <form id="rec-novo-registro" className="stack trace-form" onSubmit={salvar}>
+      <form id="rec-agendar" className="stack" onSubmit={salvar}>
         <Alert error={erro} />
-        {modoMorador ? (
-          <p className="hint">
-            Descreva o que você quer que a Gestão Técnica verifique no seu imóvel e, se puder, anexe fotos.
-            A solicitação aparece na linha do tempo.
-          </p>
-        ) : tipos.length > 1 ? (
-          <Field label="Tipo de registro">
-            <select value={tipo} onChange={(e) => setTipo(e.target.value)}>
-              {tipos.map((t) => <option key={t} value={t}>{TIPOS_RECEBIMENTO[t].label}</option>)}
-            </select>
-          </Field>
-        ) : null}
-
-        {tipo === 'problema' ? (
-          <p className="hint">O problema abre uma conversa com a construtora, que fica dentro deste registro na linha do tempo.</p>
-        ) : null}
-        {assinaturaBloqueada ? (
-          <Alert error={`Há ${problemasAbertos} problema(s) em aberto. Marque-os como resolvidos antes da assinatura de entrega.`} />
-        ) : null}
-
-        {pedeTitulo ? (
-          <Field label={tipo === 'problema' ? 'Problema' : 'Título'}>
-            <input
-              value={titulo}
-              onChange={(e) => setTitulo(e.target.value)}
-              placeholder={tipo === 'problema' ? 'Ex.: Infiltração no teto do banheiro' : 'Ex.: Reparo agendado para segunda-feira'}
-              autoFocus
-            />
-          </Field>
-        ) : null}
-
-        {!modoMorador ? (
-          <Field label={tipo === 'vistoria_agendada' ? 'Data e hora da vistoria de entrega' : 'Data e hora'}>
-            <input type="datetime-local" value={quando} onChange={(e) => setQuando(e.target.value)} required />
-          </Field>
-        ) : null}
-
-        <Field label="Descrição">
-          <textarea
-            value={descricao}
-            rows={4}
-            onChange={(e) => setDescricao(e.target.value)}
-            placeholder={modoMorador ? 'Ex.: Porta da varanda não fecha direito' : 'Detalhes deste registro…'}
+        <Field label="Título">
+          <input
+            value={titulo}
+            onChange={(e) => setTitulo(e.target.value)}
+            placeholder="Ex.: Vistoria de entrega com o proprietário"
+            autoFocus
           />
         </Field>
-
-        <div className="manut-anexos">
-          <span className="manut-anexos-label">{modoMorador || tipo === 'problema' ? 'Fotos' : 'Anexos'}</span>
-          <label className="manut-anexos-drop">
-            <input
-              type="file"
-              multiple
-              accept="image/*,.pdf"
-              onChange={(e) => {
-                setFiles([...files, ...(e.target.files || [])]);
-                e.target.value = '';
-              }}
-            />
-            <Icon name="paperclip" size={18} />
-            <span>Toque para anexar fotos ou documentos</span>
-          </label>
-          {files.length ? (
-            <ul className="manut-anexos-lista">
-              {files.map((file, i) => (
-                <li key={`${file.name}-${i}`}>
-                  <Icon name={String(file.type).startsWith('image/') ? 'eye' : 'file'} size={15} />
-                  <span className="manut-anexos-nome">{file.name}</span>
-                  <small>{formatarTamanho(file.size)}</small>
-                  <button type="button" aria-label={`Remover ${file.name}`} onClick={() => setFiles(files.filter((_, j) => j !== i))}>
-                    <Icon name="x" size={14} />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </div>
+        <Field label="Data e hora da vistoria">
+          <input type="datetime-local" value={quando} onChange={(e) => setQuando(e.target.value)} required />
+        </Field>
+        <p className="hint">A vistoria aparece no chat desta unidade para a construtora e o morador.</p>
       </form>
     </Modal>
   );
 }
 
-/* ---------- Linha do tempo de uma unidade ---------- */
+/* ---------- Tela ---------- */
 
-function LinhaTempoUnidade({ unidadeId, voltarPara, seletor }) {
+export function RecebimentoPage() {
+  const { unidadeId } = useParams();
+  const navigate = useNavigate();
   const { condoId, session, cargoTipo, isGestaoTecnica, isConstrutoraOrg } = useSession();
   const ehMorador = String(cargoTipo || '').toLowerCase() === 'morador';
   const ehConstrutora = isConstrutoraOrg || ehCargoConstrutora(cargoTipo);
-  const tipos = tiposPermitidos({ isGestaoTecnica, ehConstrutora, ehMorador });
-  const [unidade, setUnidade] = useState(null);
-  const [registros, setRegistros] = useState([]);
-  const [carregado, setCarregado] = useState(false);
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [modal, setModal] = useState(false);
+  const podeEscrever = isGestaoTecnica || ehConstrutora;
 
-  async function load() {
-    if (!unidadeId) return;
+  const [unidades, setUnidades] = useState([]);
+  const [carregado, setCarregado] = useState(false);
+  const [itens, setItens] = useState([]);
+  const [error, setError] = useState('');
+  const [q, setQ] = useState('');
+  const [filtro, setFiltro] = useState('');
+  const [texto, setTexto] = useState('');
+  const [sending, setSending] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [agendar, setAgendar] = useState(false);
+  const chatLogRef = useRef(null);
+
+  const aberta = unidades.find((u) => u.id === unidadeId) || null;
+
+  async function loadLista() {
+    if (!condoId) return;
     try {
-      const [u, linha] = await Promise.all([carregarUnidade(unidadeId), carregarLinhaTempo(unidadeId)]);
-      setUnidade(u);
-      setRegistros(linha);
+      let somenteIds = null;
+      if (ehMorador) {
+        const minhas = await unidadesDoMorador(condoId, session.user.id);
+        somenteIds = minhas.map((u) => u.id);
+      }
+      const lista = await listarChatsUnidades(condoId, { somenteIds });
+      setUnidades(lista);
       setError('');
+      // Morador com um só imóvel: abre direto o chat dele.
+      if (ehMorador && !unidadeId && lista.length === 1) navigate(`/recebimento/${lista[0].id}`, { replace: true });
     } catch (err) {
-      setError(mensagemErroRecebimento(err));
+      setError(mensagemErroRecebimentoChat(err));
     } finally {
       setCarregado(true);
     }
   }
 
-  useEffect(() => { setCarregado(false); load(); }, [unidadeId]);
-
-  const status = statusDaUnidade(registros);
-  const problemasAbertos = registros.filter((r) => r.tipo === 'problema' && !r.resolvido).length;
-  const agendada = [...registros].reverse().find((r) => r.tipo === 'vistoria_agendada');
-  const entregue = registros.find((r) => r.tipo === 'assinatura_entrega');
-  const condominioId = unidade?.condominio_id || condoId;
-
-  async function salvarRegistro(dados) {
-    setBusy(true);
-    setError('');
+  async function loadChat(id = unidadeId) {
+    if (!id) {
+      setItens([]);
+      return;
+    }
     try {
-      await criarRegistro({ condominioId, unidadeId, userId: session.user.id, ...dados });
-      setModal(false);
-      await load();
+      setItens(await carregarChatUnidade(id));
     } catch (err) {
-      setError(mensagemErroRecebimento(err));
-      setModal(false);
-    } finally {
-      setBusy(false);
+      setError(mensagemErroRecebimentoChat(err));
     }
   }
 
-  async function enviarMensagem(registro, { texto, files }) {
-    setBusy(true);
-    setError('');
-    try {
-      await enviarMensagemRecebimento({ registroId: registro.id, condominioId, userId: session.user.id, texto, files });
-      await load();
-      return true;
-    } catch (err) {
-      setError(mensagemErroRecebimento(err));
-      return false;
-    } finally {
-      setBusy(false);
-    }
-  }
+  useEffect(() => { loadLista(); }, [condoId, ehMorador, session?.user?.id]);
+  useEffect(() => { loadChat(unidadeId); }, [unidadeId]);
 
-  async function resolver(registro, resolvido) {
-    setBusy(true);
-    setError('');
-    try {
-      await marcarProblemaResolvido(registro.id, resolvido);
-      await load();
-    } catch (err) {
-      setError(mensagemErroRecebimento(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const botaoPrincipal = tipos.length ? (
-    <Btn icon={ehMorador ? 'message' : 'plus'} onClick={() => setModal(true)} disabled={busy}>
-      {ehMorador ? 'Solicitar vistoria' : 'Novo registro'}
-    </Btn>
-  ) : null;
-
-  return (
-    <Page
-      title="Recebimento"
-      lead={ehMorador
-        ? 'Linha do tempo da vistoria de entrega do seu imóvel.'
-        : `Vistoria de entrega${unidade ? ` · ${unidade.rotulo}` : ''}`}
-      actions={(
-        <div className="row trace-actions">
-          {botaoPrincipal}
-          {voltarPara ? <Btn variant="ghost" icon="layers" to={voltarPara}>Unidades</Btn> : null}
-        </div>
-      )}
-    >
-      <Alert error={error} />
-      {seletor}
-
-      <section className="trace-summary panel">
-        <div className="trace-summary-grid">
-          <div>
-            <span className="label">Unidade</span>
-            <strong>{unidade?.rotulo || '—'}</strong>
-          </div>
-          <div>
-            <span className="label">Situação</span>
-            <StatusEntrega status={status} />
-          </div>
-          <div>
-            <span className="label">Vistoria de entrega</span>
-            <strong>{agendada ? formatDateTime(agendada.data_evento) : 'Não agendada'}</strong>
-          </div>
-          <div>
-            <span className="label">{entregue ? 'Entrega assinada' : 'Problemas em aberto'}</span>
-            <strong>{entregue ? formatDateTime(entregue.data_evento) : problemasAbertos}</strong>
-          </div>
-        </div>
-      </section>
-
-      {carregado && !registros.length ? (
-        <Empty text={ehMorador
-          ? 'Ainda não há registros da vistoria de entrega do seu imóvel.'
-          : 'Nenhum registro ainda. Comece agendando a vistoria de entrega.'}
-        />
-      ) : (
-        <ol className="trace-timeline">
-          {registros.map((registro, index) => (
-            <li key={registro.id} className="trace-timeline-item">
-              <span className={`trace-timeline-dot rec-dot--${registro.tipo}`} aria-hidden="true" />
-              {index < registros.length - 1 ? <span className="trace-timeline-line" aria-hidden="true" /> : null}
-              <CartaoRegistro
-                registro={registro}
-                podeConversar={isGestaoTecnica || ehConstrutora}
-                podeResolver={isGestaoTecnica}
-                busy={busy}
-                sessionUserId={session?.user?.id}
-                onEnviarMensagem={enviarMensagem}
-                onResolver={resolver}
-              />
-            </li>
-          ))}
-        </ol>
-      )}
-
-      {tipos.length ? (
-        <div className="trace-create-bar">
-          {botaoPrincipal}
-          <p className="hint">
-            {ehMorador
-              ? 'Encontrou algo no imóvel? Solicite uma vistoria da Gestão Técnica com descrição e fotos.'
-              : ehConstrutora
-                ? 'Registre andamentos com título, descrição e anexos. Responda os problemas na conversa de cada um.'
-                : 'Agende a vistoria, registre cada problema (abre conversa com a construtora), a vistoria realizada e, ao final, a assinatura de entrega.'}
-          </p>
-        </div>
-      ) : null}
-
-      <NovoRegistroModal
-        open={modal}
-        tipos={tipos}
-        modoMorador={ehMorador}
-        problemasAbertos={problemasAbertos}
-        temVistoriaAgendada={Boolean(agendada)}
-        onClose={() => setModal(false)}
-        onSalvar={salvarRegistro}
-        busy={busy}
-      />
-    </Page>
-  );
-}
-
-/* ---------- Lista de unidades (Gestão Técnica, construtora, administração) ---------- */
-
-function ListaUnidades() {
-  const { condoId } = useSession();
-  const [unidades, setUnidades] = useState([]);
-  const [carregado, setCarregado] = useState(false);
-  const [error, setError] = useState('');
-  const [q, setQ] = useState('');
-  const [filtro, setFiltro] = useState('');
+  // Atualiza o chat aberto de tempos em tempos (mensagens da outra parte).
+  useEffect(() => {
+    if (!unidadeId) return undefined;
+    const t = setInterval(() => { loadChat(unidadeId); loadLista(); }, 20000);
+    return () => clearInterval(t);
+  }, [unidadeId, condoId]);
 
   useEffect(() => {
-    if (!condoId) return;
-    listarUnidadesRecebimento(condoId)
-      .then((lista) => { setUnidades(lista); setError(''); })
-      .catch((err) => setError(mensagemErroRecebimento(err)))
-      .finally(() => setCarregado(true));
-  }, [condoId]);
+    const el = chatLogRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [itens]);
 
   const contagem = useMemo(() => {
     const c = {};
@@ -559,97 +217,196 @@ function ListaUnidades() {
   }, [unidades]);
 
   const visiveis = unidades.filter((u) => (!filtro || u.status === filtro)
-    && u.rotulo.toLowerCase().includes(q.trim().toLowerCase()));
+    && `${u.rotulo} ${u.preview}`.toLowerCase().includes(q.trim().toLowerCase()));
+
+  async function enviar(e) {
+    e.preventDefault();
+    if (!aberta || !texto.trim() || sending) return;
+    setSending(true);
+    setError('');
+    try {
+      await enviarMensagemUnidade({ unidadeId: aberta.id, condominioId: condoId, userId: session.user.id, texto });
+      setTexto('');
+      await Promise.all([loadChat(), loadLista()]);
+    } catch (err) {
+      setError(mensagemErroRecebimentoChat(err));
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function enviarArquivo(file) {
+    if (!aberta || !file) return;
+    setSending(true);
+    setError('');
+    try {
+      await enviarMensagemUnidade({ unidadeId: aberta.id, condominioId: condoId, userId: session.user.id, texto: '', files: [file] });
+      await Promise.all([loadChat(), loadLista()]);
+    } catch (err) {
+      setError(mensagemErroRecebimentoChat(err));
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function salvarVistoria({ titulo, dataEvento }) {
+    setBusy(true);
+    setError('');
+    try {
+      await agendarVistoriaUnidade({ condominioId: condoId, unidadeId: aberta.id, userId: session.user.id, titulo, dataEvento });
+      setAgendar(false);
+      await Promise.all([loadChat(), loadLista()]);
+    } catch (err) {
+      setError(mensagemErroRecebimentoChat(err));
+      setAgendar(false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function alternarOk() {
+    if (!aberta) return;
+    const ok = aberta.status === 'ok';
+    const pergunta = ok
+      ? `Remover o OK de ${aberta.rotulo}? A unidade volta a ficar em andamento.`
+      : `Marcar ${aberta.rotulo} como OK? Significa que a entrega foi concluída sem pendências.`;
+    if (!window.confirm(pergunta)) return;
+    setBusy(true);
+    setError('');
+    try {
+      if (ok) await desmarcarUnidadeOk(aberta.id);
+      else await marcarUnidadeOk({ condominioId: condoId, unidadeId: aberta.id, userId: session.user.id });
+      await Promise.all([loadChat(), loadLista()]);
+    } catch (err) {
+      setError(mensagemErroRecebimentoChat(err));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
-    <Page title="Recebimento" lead="Vistoria de entrega de cada unidade. Escolha a unidade para ver ou registrar na linha do tempo.">
+    <Page
+      title="Recebimento"
+      lead={ehMorador
+        ? 'Acompanhe a vistoria de entrega do seu imóvel. A conversa é entre a Gestão Técnica e a construtora.'
+        : 'Um chat por unidade entre a Gestão Técnica e a construtora sobre a vistoria de entrega.'}
+      className="page-suporte page-recebimento"
+    >
       <Alert error={error} />
-      <div className="row chamado-filters">
-        <label className="search-field">
-          <Icon name="search" size={16} />
-          <input placeholder="Pesquisar unidade" value={q} onChange={(e) => setQ(e.target.value)} />
-        </label>
-        <select value={filtro} onChange={(e) => setFiltro(e.target.value)}>
-          <option value="">Todas as situações ({unidades.length})</option>
-          {Object.entries(STATUS_UNIDADE).map(([id, info]) => (
-            <option key={id} value={id}>{info.label} ({contagem[id] || 0})</option>
-          ))}
-        </select>
-      </div>
-      {carregado && !visiveis.length ? (
-        <Empty text={unidades.length ? 'Nenhuma unidade encontrada.' : 'Nenhuma unidade cadastrada neste condomínio.'} />
-      ) : (
-        <div className="ticket-list">
-          {visiveis.map((u) => (
-            <Link key={u.id} className="ticket-card rec-unidade" to={`/recebimento/${u.id}`}>
-              <div className="ticket-card-top">
-                <strong className="ticket-card-title">{u.rotulo}</strong>
-                <StatusEntrega status={u.status} />
-              </div>
-              <small>
-                {u.totalRegistros ? `${u.totalRegistros} registro(s)` : 'Sem registros'}
-                {u.problemasAbertos ? ` · ${u.problemasAbertos} problema(s) em aberto` : ''}
-                {u.ultimoEvento ? ` · último em ${formatDate(u.ultimoEvento)}` : ''}
-              </small>
-            </Link>
-          ))}
+      {!ehMorador || unidades.length > 1 ? (
+        <div className="row chamado-filters">
+          <label className="search-field">
+            <Icon name="search" size={16} />
+            <input placeholder="Pesquisar unidade" value={q} onChange={(e) => setQ(e.target.value)} />
+          </label>
+          <select value={filtro} onChange={(e) => setFiltro(e.target.value)}>
+            <option value="">Todas ({unidades.length})</option>
+            <option value="sem_vistoria">Sem vistoria ({contagem.sem_vistoria || 0})</option>
+            <option value="chat">Em andamento ({contagem.chat || 0})</option>
+            <option value="ok">OK ({contagem.ok || 0})</option>
+          </select>
         </div>
-      )}
+      ) : null}
+
+      <div className={`suporte-layout suporte-layout--mobile-nav${unidadeId ? ' suporte-layout--open' : ''}`}>
+        <aside className="panel suporte-list rec-lista">
+          {carregado && !visiveis.length ? (
+            <Empty text={ehMorador ? 'Seu usuário ainda não está ligado a uma unidade.' : 'Nenhuma unidade encontrada.'} />
+          ) : visiveis.map((u) => (
+            <button
+              type="button"
+              key={u.id}
+              className={`suporte-item rec-item is-${u.status}${u.id === unidadeId ? ' active' : ''}`}
+              onClick={() => navigate(`/recebimento/${u.id}`)}
+            >
+              <div className="suporte-item-top">
+                <strong className="suporte-item-name rec-item-nome">
+                  {u.status === 'ok' ? <span className="rec-item-check" aria-hidden="true"><Icon name="check" size={12} /></span> : null}
+                  {u.rotulo}
+                </strong>
+                <SeloRecebimento status={u.status} />
+              </div>
+              <small className="suporte-item-preview">
+                {u.preview || (u.status === 'sem_vistoria' ? 'Nenhuma vistoria ainda' : STATUS_CHAT[u.status]?.label)}
+              </small>
+            </button>
+          ))}
+        </aside>
+
+        <section className={`chat-shell suporte-chat${aberta ? '' : ' empty'}`}>
+          {!aberta ? (
+            <Empty text={carregado ? 'Selecione uma unidade para abrir o chat.' : 'Carregando…'} />
+          ) : (
+            <>
+              <div className="chat-top">
+                <button type="button" className="suporte-back" onClick={() => navigate('/recebimento')}>
+                  <Icon name="chevron" size={18} />
+                  Unidades
+                </button>
+                <ChatHeader
+                  icon="door"
+                  title={aberta.rotulo}
+                  subtitle={aberta.status === 'ok' ? 'Entrega OK' : aberta.status === 'chat' ? 'Vistoria em andamento' : 'Sem vistoria'}
+                >
+                  <SeloRecebimento status={aberta.status} />
+                  {isGestaoTecnica ? (
+                    <Btn variant="ghost" icon="calendar" onClick={() => setAgendar(true)} disabled={busy}>
+                      Agendar vistoria
+                    </Btn>
+                  ) : null}
+                  {isGestaoTecnica ? (
+                    <Btn
+                      variant={aberta.status === 'ok' ? 'ghost' : 'primary'}
+                      icon={aberta.status === 'ok' ? 'x' : 'check'}
+                      className={aberta.status === 'ok' ? '' : 'rec-btn-ok'}
+                      onClick={alternarOk}
+                      disabled={busy}
+                    >
+                      {aberta.status === 'ok' ? 'Remover OK' : 'Marcar OK'}
+                    </Btn>
+                  ) : null}
+                </ChatHeader>
+              </div>
+              <div className="chat-log" ref={chatLogRef}>
+                {!itens.length ? (
+                  <Empty text={isGestaoTecnica ? 'Nenhuma mensagem ainda. Comece agendando a vistoria.' : 'Nenhuma mensagem ainda.'} />
+                ) : itens.map((item) => (item.kind === 'msg' ? (
+                  <ChatMensagem
+                    key={item.id}
+                    mensagem={item.mensagem}
+                    mine={item.mensagem.usuario_id === session?.user?.id}
+                    quando={formatChatTime(item.at)}
+                    mostrarNome
+                  />
+                ) : (
+                  <EventoChat key={item.id} registro={item.registro} />
+                )))}
+              </div>
+              {podeEscrever ? (
+                <ChatComposer
+                  value={texto}
+                  onChange={setTexto}
+                  sending={sending}
+                  onSend={enviar}
+                  onFile={enviarArquivo}
+                  placeholder={isGestaoTecnica ? 'Escreva para a construtora' : 'Escreva para a Gestão Técnica'}
+                />
+              ) : (
+                <p className="hint chat-readonly">Somente visualização</p>
+              )}
+            </>
+          )}
+        </section>
+      </div>
+
+      <AgendarVistoriaModal
+        open={agendar}
+        unidade={aberta?.rotulo}
+        busy={busy}
+        onClose={() => setAgendar(false)}
+        onSalvar={salvarVistoria}
+      />
     </Page>
   );
 }
 
-/* ---------- Morador: o próprio imóvel ---------- */
-
-function RecebimentoMorador({ unidadeId }) {
-  const { condoId, session } = useSession();
-  const navigate = useNavigate();
-  const [unidades, setUnidades] = useState([]);
-  const [carregado, setCarregado] = useState(false);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    if (!condoId || !session?.user?.id) return;
-    unidadesDoMorador(condoId, session.user.id)
-      .then((lista) => { setUnidades(lista); setError(''); })
-      .catch((err) => setError(mensagemErroRecebimento(err)))
-      .finally(() => setCarregado(true));
-  }, [condoId, session?.user?.id]);
-
-  if (!carregado) return <Page title="Recebimento"><p className="hint">Carregando…</p></Page>;
-  if (!unidades.length) {
-    return (
-      <Page title="Recebimento">
-        <Alert error={error} />
-        <Empty text="Seu usuário ainda não está vinculado a uma unidade. Fale com a administração do condomínio." />
-      </Page>
-    );
-  }
-  const atual = unidades.find((u) => u.id === unidadeId) || unidades[0];
-  const seletor = unidades.length > 1 ? (
-    <div className="rec-unidades-tabs" role="tablist" aria-label="Seus imóveis">
-      {unidades.map((u) => (
-        <button
-          key={u.id}
-          type="button"
-          role="tab"
-          aria-selected={u.id === atual.id}
-          className={u.id === atual.id ? 'is-on' : ''}
-          onClick={() => navigate(`/recebimento/${u.id}`)}
-        >
-          {u.rotulo}
-        </button>
-      ))}
-    </div>
-  ) : null;
-  return <LinhaTempoUnidade unidadeId={atual.id} seletor={seletor} />;
-}
-
-export function RecebimentoPage() {
-  const { unidadeId } = useParams();
-  const { cargoTipo } = useSession();
-  const ehMorador = String(cargoTipo || '').toLowerCase() === 'morador';
-  if (ehMorador) return <RecebimentoMorador unidadeId={unidadeId} />;
-  if (unidadeId) return <LinhaTempoUnidade unidadeId={unidadeId} voltarPara="/recebimento" />;
-  return <ListaUnidades />;
-}

@@ -303,3 +303,184 @@ export async function listarChatsRecebimento() {
     totalMensagens: contagem[r.id] || 0,
   }));
 }
+
+/* ===================== Recebimento em chat (um chat por unidade) ===================== */
+
+export const SQL_RECEBIMENTO_CHAT = 'supabase/recebimento-chat.sql';
+
+/** Situação de cada unidade na lista: sem vistoria, com chat (azul) ou OK (verde). */
+export const STATUS_CHAT = {
+  sem_vistoria: { label: 'Sem vistoria' },
+  chat: { label: 'Em andamento' },
+  ok: { label: 'OK' },
+};
+
+export function mensagemErroRecebimentoChat(err) {
+  const msg = String(err?.message || err || '');
+  if (/recebimento_mensagens\.unidade_id|unidade_id|Informe a unidade do chat|registro_id.*null|23502/i.test(msg)) {
+    return `Rode o arquivo ${SQL_RECEBIMENTO_CHAT} no SQL Editor do Supabase e tente de novo.`;
+  }
+  return mensagemErroRecebimento(err);
+}
+
+function statusChatDe(registros, totalMensagens) {
+  if ((registros || []).some((r) => r.tipo === 'assinatura_entrega')) return 'ok';
+  if (totalMensagens > 0 || (registros || []).length) return 'chat';
+  return 'sem_vistoria';
+}
+
+function previewMensagem(m) {
+  if (!m) return '';
+  const papel = PAPEL_LABEL[m.autor_papel] || '';
+  return `${papel ? `${papel}: ` : ''}${m.texto || 'Anexo'}`;
+}
+
+/** Unidades do condomínio com a situação do chat de cada uma. */
+export async function listarChatsUnidades(condoId, { somenteIds = null } = {}) {
+  let unidadesQuery = supabase.from('unidades').select('id, identificacao, bloco, andar').eq('condominio_id', condoId);
+  if (somenteIds) unidadesQuery = unidadesQuery.in('id', somenteIds.length ? somenteIds : ['00000000-0000-0000-0000-000000000000']);
+  const [unidades, registros, mensagens] = await Promise.all([
+    unidadesQuery,
+    supabase.from('recebimento_registros').select('id, unidade_id, tipo, titulo, data_evento').eq('condominio_id', condoId),
+    supabase.from('recebimento_mensagens').select('id, unidade_id, texto, autor_papel, created_at').eq('condominio_id', condoId).order('created_at'),
+  ]);
+  if (unidades.error) throw unidades.error;
+  if (registros.error) throw registros.error;
+  if (mensagens.error) throw mensagens.error;
+  const regs = {};
+  for (const r of registros.data || []) (regs[r.unidade_id] ||= []).push(r);
+  const msgs = {};
+  for (const m of mensagens.data || []) (msgs[m.unidade_id] ||= []).push(m);
+  return (unidades.data || [])
+    .map((u) => {
+      const lista = msgs[u.id] || [];
+      const ultima = lista[lista.length - 1] || null;
+      const eventos = regs[u.id] || [];
+      const agendada = eventos.filter((r) => r.tipo === 'vistoria_agendada').sort((a, b) => String(b.data_evento).localeCompare(String(a.data_evento)))[0];
+      return {
+        ...u,
+        rotulo: labelUnidade(u, 'Unidade'),
+        status: statusChatDe(eventos, lista.length),
+        totalMensagens: lista.length,
+        preview: ultima ? previewMensagem(ultima) : agendada ? `Vistoria: ${agendada.titulo || 'agendada'}` : '',
+        ultimaAtividade: [ultima?.created_at, ...eventos.map((r) => r.data_evento)].filter(Boolean).sort().pop() || null,
+      };
+    })
+    .sort((a, b) => a.rotulo.localeCompare(b.rotulo, 'pt-BR', { numeric: true }));
+}
+
+/** Chat de uma unidade: mensagens (com anexos) e eventos (vistoria agendada, OK), em ordem. */
+export async function carregarChatUnidade(unidadeId) {
+  const [mensagens, registros] = await Promise.all([
+    supabase.from('recebimento_mensagens').select('*').eq('unidade_id', unidadeId).order('created_at'),
+    supabase.from('recebimento_registros').select('*').eq('unidade_id', unidadeId).order('data_evento'),
+  ]);
+  if (mensagens.error) throw mensagens.error;
+  if (registros.error) throw registros.error;
+  const msgs = mensagens.data || [];
+  const msgIds = msgs.map((m) => m.id);
+  const arquivos = msgIds.length
+    ? await supabase.from('recebimento_arquivos').select(`mensagem_id, ordem, arquivos(${CAMPOS_ARQUIVO})`).in('mensagem_id', msgIds)
+    : { data: [] };
+  const porMensagem = {};
+  for (const row of arquivos.data || []) {
+    const arquivo = Array.isArray(row.arquivos) ? row.arquivos[0] : row.arquivos;
+    if (arquivo) (porMensagem[row.mensagem_id] ||= []).push({ ...arquivo, ordem: row.ordem || 0 });
+  }
+  await Promise.all(Object.keys(porMensagem).map(async (k) => {
+    porMensagem[k] = await Promise.all(porMensagem[k].sort((a, b) => a.ordem - b.ordem).map(comUrl));
+  }));
+  const autores = [...new Set([...msgs.map((m) => m.usuario_id), ...(registros.data || []).map((r) => r.criado_por)].filter(Boolean))];
+  const nomes = {};
+  if (autores.length) {
+    const { data: us } = await supabase.from('usuarios').select('id, nome').in('id', autores);
+    for (const u of us || []) nomes[u.id] = u.nome;
+  }
+  const itens = [
+    ...msgs.map((m) => ({
+      kind: 'msg',
+      id: m.id,
+      at: m.created_at,
+      mensagem: {
+        ...m,
+        usuarios: { nome: [nomes[m.usuario_id], PAPEL_LABEL[m.autor_papel]].filter(Boolean).join(' · ') || PAPEL_LABEL[m.autor_papel] || 'Equipe' },
+        anexos: porMensagem[m.id] || [],
+      },
+    })),
+    ...(registros.data || []).map((r) => ({
+      kind: 'evento',
+      id: r.id,
+      at: r.tipo === 'vistoria_agendada' ? r.created_at : r.data_evento,
+      registro: { ...r, autorNome: nomes[r.criado_por] || '' },
+    })),
+  ];
+  return itens.sort((a, b) => String(a.at).localeCompare(String(b.at)));
+}
+
+export async function enviarMensagemUnidade({ unidadeId, condominioId, userId, texto, files }) {
+  const corpo = String(texto || '').trim();
+  if (!corpo && !files?.length) throw new Error('Escreva a mensagem ou anexe um arquivo.');
+  const { data, error } = await supabase
+    .from('recebimento_mensagens')
+    .insert({
+      unidade_id: unidadeId,
+      condominio_id: condominioId,
+      texto: corpo || (files?.length === 1 ? `Arquivo: ${files[0].name}` : 'Arquivos anexados'),
+    })
+    .select('id')
+    .single();
+  if (error) throw error;
+  if (files?.length) await anexar({ condominioId, userId, files, mensagemId: data.id });
+  return data.id;
+}
+
+export function agendarVistoriaUnidade({ condominioId, unidadeId, userId, titulo, dataEvento }) {
+  return criarRegistro({ condominioId, unidadeId, userId, tipo: 'vistoria_agendada', titulo, dataEvento });
+}
+
+export function marcarUnidadeOk({ condominioId, unidadeId, userId }) {
+  return criarRegistro({ condominioId, unidadeId, userId, tipo: 'assinatura_entrega', titulo: 'Entrega OK' });
+}
+
+export async function desmarcarUnidadeOk(unidadeId) {
+  const { error } = await supabase.from('recebimento_registros').delete().eq('unidade_id', unidadeId).eq('tipo', 'assinatura_entrega');
+  if (error) throw error;
+}
+
+/** Construtora: chats de recebimento com atividade, de todos os condomínios. */
+export async function listarChatsRecebimentoGlobal() {
+  const [registros, mensagens] = await Promise.all([
+    supabase.from('recebimento_registros').select('unidade_id, condominio_id, tipo, titulo, data_evento, unidades(id, identificacao, bloco, andar), condominios(id, nome)'),
+    supabase.from('recebimento_mensagens').select('unidade_id, condominio_id, texto, autor_papel, created_at, unidades(id, identificacao, bloco, andar), condominios(id, nome)').order('created_at'),
+  ]);
+  if (registros.error) throw registros.error;
+  if (mensagens.error) throw mensagens.error;
+  const porUnidade = new Map();
+  const garantir = (row) => {
+    if (!row.unidade_id) return null;
+    if (!porUnidade.has(row.unidade_id)) {
+      const unidade = Array.isArray(row.unidades) ? row.unidades[0] : row.unidades;
+      const condominio = Array.isArray(row.condominios) ? row.condominios[0] : row.condominios;
+      porUnidade.set(row.unidade_id, {
+        unidadeId: row.unidade_id,
+        condominioId: row.condominio_id,
+        rotulo: labelUnidade(unidade, 'Unidade'),
+        condominio: condominio?.nome || 'Condomínio',
+        registros: [],
+        mensagens: [],
+      });
+    }
+    return porUnidade.get(row.unidade_id);
+  };
+  for (const r of registros.data || []) garantir(r)?.registros.push(r);
+  for (const m of mensagens.data || []) garantir(m)?.mensagens.push(m);
+  return [...porUnidade.values()].map((c) => {
+    const ultima = c.mensagens[c.mensagens.length - 1] || null;
+    return {
+      ...c,
+      status: statusChatDe(c.registros, c.mensagens.length),
+      preview: ultima ? previewMensagem(ultima) : '',
+      ultimaAtividade: [ultima?.created_at, ...c.registros.map((r) => r.data_evento)].filter(Boolean).sort().pop() || null,
+    };
+  }).sort((a, b) => String(b.ultimaAtividade).localeCompare(String(a.ultimaAtividade)));
+}
