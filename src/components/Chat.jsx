@@ -6,6 +6,7 @@ import { horarioDoEvento, montarLinhaDoTempoChat } from '../lib/chamadoRastreabi
 import { mensagemEhNova } from '../lib/notifications';
 import { Empty, UserAvatar } from './ui';
 import { Icon } from './icons';
+import { abrirArquivo } from './ArquivoPreview';
 
 function iniciais(nome) {
   const parts = String(nome || '').trim().split(/\s+/).filter(Boolean);
@@ -52,7 +53,19 @@ export function ChatAnexos({ anexos }) {
         }
         if (arquivo.url) {
           return (
-            <a key={key} className="chat-file" href={arquivo.url} target="_blank" rel="noreferrer">
+            <a
+              key={key}
+              className="chat-file"
+              href={arquivo.url}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(e) => {
+                // Abre para ver (PDF etc.), em vez de baixar.
+                if (e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;
+                e.preventDefault();
+                abrirArquivo(arquivo, arquivo.url);
+              }}
+            >
               <Icon name="file" size={16} />
               {arquivo.nome_original || 'Abrir arquivo'}
             </a>

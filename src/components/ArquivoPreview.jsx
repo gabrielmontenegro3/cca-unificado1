@@ -42,6 +42,77 @@ export function abrirEmNovaAba(url) {
   window.open(url, '_blank', 'noopener,noreferrer');
 }
 
+const MIME_VISUALIZAVEL = {
+  pdf: 'application/pdf',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  bmp: 'image/bmp',
+  svg: 'image/svg+xml',
+  txt: 'text/plain',
+  csv: 'text/plain',
+  mp4: 'video/mp4',
+  webm: 'video/webm',
+  mov: 'video/quicktime',
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+};
+
+/** Tipo que o navegador consegue mostrar na aba (PDF, imagem, texto, vídeo). Vazio = não mostra. */
+export function mimeVisualizavel(arquivo) {
+  const mime = String(arquivo?.mime_type || '').toLowerCase();
+  const ext = extensaoDe(arquivo).toLowerCase();
+  if (MIME_VISUALIZAVEL[ext]) return MIME_VISUALIZAVEL[ext];
+  if (/^(application\/pdf|image\/|text\/plain|video\/|audio\/)/.test(mime)) return mime;
+  return '';
+}
+
+/** O navegador abre (true) ou só consegue baixar (false, ex.: Word, Excel). */
+export function arquivoAbreNoNavegador(arquivo) {
+  return Boolean(mimeVisualizavel(arquivo));
+}
+
+/**
+ * Abre o arquivo em outra aba para VER, em vez de baixar.
+ * O arquivo é buscado e aberto com o tipo certo; assim o navegador mostra o PDF/imagem
+ * mesmo quando o servidor entrega o arquivo como "download".
+ * Word, Excel e afins o navegador não sabe mostrar: esses continuam sendo baixados.
+ */
+export async function abrirArquivo(arquivo, url) {
+  if (!url) return;
+  const mime = mimeVisualizavel(arquivo);
+  if (!mime) {
+    abrirEmNovaAba(url);
+    return;
+  }
+  // A aba abre já no clique (senão o navegador bloqueia como pop-up) e recebe o arquivo em seguida.
+  const aba = window.open('', '_blank');
+  if (!aba) {
+    abrirEmNovaAba(url);
+    return;
+  }
+  try {
+    aba.opener = null;
+    aba.document.title = nomeDe(arquivo);
+    aba.document.body.style.cssText = 'margin:0;display:grid;place-items:center;height:100vh;font:16px system-ui,sans-serif;color:#555;background:#f4f4f4';
+    aba.document.body.textContent = `Abrindo ${nomeDe(arquivo)}…`;
+  } catch {
+    // Alguns navegadores não deixam escrever na aba nova; segue mesmo assim.
+  }
+  try {
+    const resposta = await fetch(url);
+    if (!resposta.ok) throw new Error(String(resposta.status));
+    const blob = await resposta.blob();
+    const blobUrl = URL.createObjectURL(new Blob([blob], { type: mime }));
+    aba.location.replace(blobUrl);
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 10 * 60 * 1000);
+  } catch {
+    aba.location.replace(url);
+  }
+}
+
 /** Botão pequeno com nome do arquivo; abre o arquivo em outra aba. */
 export function ArquivoChip({ arquivo, url }) {
   const tipo = tipoArquivo(arquivo);
@@ -50,7 +121,7 @@ export function ArquivoChip({ arquivo, url }) {
     <button
       type="button"
       className={`arquivo-chip arquivo-chip--${tipo}`}
-      onClick={() => abrirEmNovaAba(url)}
+      onClick={() => abrirArquivo(arquivo, url)}
       disabled={!url}
       title={`Abrir ${nomeDe(arquivo)} em outra aba`}
     >
@@ -73,7 +144,7 @@ export function ArquivoPreviewCard({ arquivo, url, actions = null, compact = fal
       <button
         type="button"
         className="arquivo-preview-thumb"
-        onClick={() => abrirEmNovaAba(url)}
+        onClick={() => abrirArquivo(arquivo, url)}
         disabled={!url}
         aria-label={`Abrir ${nome} em outra aba`}
         title="Abrir em outra aba"
@@ -101,7 +172,7 @@ export function ArquivoPreviewCard({ arquivo, url, actions = null, compact = fal
         <button
           type="button"
           className="arquivo-preview-btn"
-          onClick={() => abrirEmNovaAba(url)}
+          onClick={() => abrirArquivo(arquivo, url)}
           disabled={!url}
           title="Abrir em outra aba"
         >

@@ -12,7 +12,7 @@ import { Alert, Btn, Empty } from '../components/ui';
 import { Icon } from '../components/icons';
 import { GestaoBar } from '../components/GestaoBar';
 import { ChatComposer, ChatHeader, ChatMensagem } from '../components/Chat';
-import { SeloRecebimento } from './Recebimento';
+import { AnexosVistoria, SeloRecebimento } from './Recebimento';
 
 function horaDe(valor) {
   const d = new Date(valor);
@@ -36,6 +36,8 @@ function EventoChatPortal({ registro }) {
       <div className="chat-event-copy">
         <strong>{registro.titulo || (vistoria ? 'Vistoria agendada' : 'Registro')}</strong>
         {vistoria ? <span>Vistoria em {formatDate(registro.data_evento)} às {horaDe(registro.data_evento)}</span> : registro.descricao ? <span>{registro.descricao}</span> : null}
+        {vistoria && registro.descricao ? <p className="rec-evento-descricao">{registro.descricao}</p> : null}
+        <AnexosVistoria anexos={registro.arquivos} />
       </div>
       <time>{formatChatTime(registro.created_at || registro.data_evento)}</time>
     </div>

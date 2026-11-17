@@ -337,10 +337,18 @@ function previewMensagem(m) {
 
 /** Unidades do condomínio com a situação do chat de cada uma. */
 export async function listarChatsUnidades(condoId, { somenteIds = null } = {}) {
-  let unidadesQuery = supabase.from('unidades').select('id, identificacao, bloco, andar').eq('condominio_id', condoId);
-  if (somenteIds) unidadesQuery = unidadesQuery.in('id', somenteIds.length ? somenteIds : ['00000000-0000-0000-0000-000000000000']);
+  const consultarUnidades = (campos) => {
+    let query = supabase.from('unidades').select(campos).eq('condominio_id', condoId);
+    if (somenteIds) query = query.in('id', somenteIds.length ? somenteIds : ['00000000-0000-0000-0000-000000000000']);
+    return query;
+  };
+  // A coluna "ordem" vem do supabase/unidades-ordem.sql; sem ela, ordena pelo número.
+  let unidadesRes = await consultarUnidades('id, identificacao, bloco, andar, ordem');
+  if (unidadesRes.error && /ordem/i.test(String(unidadesRes.error.message || ''))) {
+    unidadesRes = await consultarUnidades('id, identificacao, bloco, andar');
+  }
   const [unidades, registros, mensagens] = await Promise.all([
-    unidadesQuery,
+    unidadesRes,
     supabase.from('recebimento_registros').select('id, unidade_id, tipo, titulo, data_evento').eq('condominio_id', condoId),
     supabase.from('recebimento_mensagens').select('id, unidade_id, texto, autor_papel, created_at').eq('condominio_id', condoId).order('created_at'),
   ]);
@@ -352,6 +360,7 @@ export async function listarChatsUnidades(condoId, { somenteIds = null } = {}) {
   const msgs = {};
   for (const m of mensagens.data || []) (msgs[m.unidade_id] ||= []).push(m);
   return (unidades.data || [])
+    .filter((u) => !ehAreasComuns(u))
     .map((u) => {
       const lista = msgs[u.id] || [];
       const ultima = lista[lista.length - 1] || null;
@@ -366,7 +375,137 @@ export async function listarChatsUnidades(condoId, { somenteIds = null } = {}) {
         ultimaAtividade: [ultima?.created_at, ...eventos.map((r) => r.data_evento)].filter(Boolean).sort().pop() || null,
       };
     })
-    .sort((a, b) => a.rotulo.localeCompare(b.rotulo, 'pt-BR', { numeric: true }));
+    .sort(ordenarUnidades);
+}
+
+/* ---------- Cadastro das unidades (Gestão Técnica) ---------- */
+
+/** "Áreas comuns" é a unidade técnica dos chamados; não entra no Recebimento. */
+export function ehAreasComuns(unidade) {
+  return /^[áa]reas? comu(m|ns)$/i.test(String(unidade?.identificacao || '').trim());
+}
+
+/** Ordem definida pela Gestão Técnica; sem ordem, bloco e número (101, 102… 201). */
+export function ordenarUnidades(a, b) {
+  const oa = Number.isInteger(a.ordem) ? a.ordem : Number.MAX_SAFE_INTEGER;
+  const ob = Number.isInteger(b.ordem) ? b.ordem : Number.MAX_SAFE_INTEGER;
+  if (oa !== ob) return oa - ob;
+  return String(a.bloco || '').localeCompare(String(b.bloco || ''), 'pt-BR', { numeric: true })
+    || String(a.identificacao || '').localeCompare(String(b.identificacao || ''), 'pt-BR', { numeric: true });
+}
+
+function limparCampo(valor) {
+  return String(valor ?? '').trim();
+}
+
+/** "Bloco A" → "A" (igual ao que o backend grava quando vincula um morador). */
+function limparBloco(valor) {
+  return limparCampo(valor).replace(/^bloco\s+/i, '');
+}
+
+/** Tira "Apto", "Apt.", "Apartamento" do começo: a unidade fica só com o número. */
+export function limparIdentificacao(valor) {
+  return limparCampo(valor).replace(/^(apartamento|apto\.?|apt\.?)\s+/i, '');
+}
+
+function mesmaUnidade(u, identificacao, bloco) {
+  return limparCampo(u.identificacao).toLowerCase() === identificacao.toLowerCase()
+    && limparCampo(u.bloco).toLowerCase() === bloco.toLowerCase();
+}
+
+export function mensagemErroUnidade(err) {
+  const msg = String(err?.message || err || '');
+  if (/ordem/i.test(msg) && /column|schema cache|does not exist|PGRST204|42703/i.test(msg)) {
+    return 'Rode o arquivo supabase/unidades-ordem.sql no SQL Editor do Supabase e tente de novo.';
+  }
+  if (/foreign key|23503|violates/i.test(msg)) {
+    return 'Esta unidade está ligada a outros registros (chamados ou moradores) e não pode ser excluída.';
+  }
+  if (/row-level security|permission|42501/i.test(msg)) {
+    return 'Sem permissão para alterar as unidades deste condomínio.';
+  }
+  return msg || 'Não foi possível concluir.';
+}
+
+/** Cria várias unidades de uma vez; pula as que já existem (mesmo bloco e número). */
+export async function criarUnidades(condoId, novas, existentes, { comOrdem = true } = {}) {
+  const lista = [];
+  const jaTem = [...existentes];
+  let proxima = existentes.reduce((max, u) => (Number.isInteger(u.ordem) ? Math.max(max, u.ordem) : max), -1) + 1;
+  let repetidas = 0;
+  for (const nova of novas) {
+    const identificacao = limparIdentificacao(nova.identificacao);
+    const bloco = limparBloco(nova.bloco);
+    if (!identificacao) continue;
+    if (jaTem.some((u) => mesmaUnidade(u, identificacao, bloco))) {
+      repetidas += 1;
+      continue;
+    }
+    const row = {
+      condominio_id: condoId,
+      identificacao,
+      bloco: bloco || null,
+      andar: limparCampo(nova.andar) || null,
+    };
+    if (comOrdem) {
+      row.ordem = proxima;
+      proxima += 1;
+    }
+    lista.push(row);
+    jaTem.push(row);
+  }
+  if (lista.length) {
+    let { error } = await supabase.from('unidades').insert(lista);
+    // Sem o supabase/unidades-ordem.sql a coluna "ordem" não existe: cria mesmo assim.
+    if (error && comOrdem && /ordem/i.test(String(error.message || ''))) {
+      ({ error } = await supabase.from('unidades').insert(lista.map(({ ordem, ...resto }) => resto)));
+    }
+    if (error) throw error;
+  }
+  return { criadas: lista.length, repetidas };
+}
+
+export async function editarUnidade(unidade, dados, existentes) {
+  const identificacao = limparIdentificacao(dados.identificacao);
+  const bloco = limparBloco(dados.bloco);
+  if (!identificacao) throw new Error('Informe o número do apartamento.');
+  if (existentes.some((u) => u.id !== unidade.id && mesmaUnidade(u, identificacao, bloco))) {
+    throw new Error(`Já existe a unidade ${identificacao}${bloco ? ` no bloco ${bloco}` : ''}.`);
+  }
+  const { error } = await supabase
+    .from('unidades')
+    .update({ identificacao, bloco: bloco || null, andar: limparCampo(dados.andar) || null })
+    .eq('id', unidade.id);
+  if (error) throw error;
+}
+
+/** Quantos moradores estão ligados à unidade (para não excluir uma unidade ocupada). */
+export async function contarMoradoresUnidade(unidadeId) {
+  const { count, error } = await supabase
+    .from('unidade_moradores')
+    .select('usuario_id', { count: 'exact', head: true })
+    .eq('unidade_id', unidadeId);
+  if (error) return 0;
+  return count || 0;
+}
+
+export async function excluirUnidade(unidadeId) {
+  const { error } = await supabase.from('unidades').delete().eq('id', unidadeId);
+  if (error) throw error;
+}
+
+/** Grava a nova ordem; só atualiza as unidades que mudaram de posição. */
+export async function salvarOrdemUnidades(lista, idsAntes) {
+  const mudaram = lista
+    .map((u, ordem) => ({ u, ordem }))
+    .filter(({ u, ordem }) => idsAntes[ordem] !== u.id || u.ordem !== ordem);
+  if (!mudaram.length) return;
+  const resultados = await Promise.all(mudaram.map(({ u, ordem }) => supabase
+    .from('unidades')
+    .update({ ordem })
+    .eq('id', u.id)));
+  const falha = resultados.find((r) => r.error);
+  if (falha) throw falha.error;
 }
 
 /** Chat de uma unidade: mensagens (com anexos) e eventos (vistoria agendada, OK), em ordem. */
@@ -379,17 +518,34 @@ export async function carregarChatUnidade(unidadeId) {
   if (registros.error) throw registros.error;
   const msgs = mensagens.data || [];
   const msgIds = msgs.map((m) => m.id);
-  const arquivos = msgIds.length
-    ? await supabase.from('recebimento_arquivos').select(`mensagem_id, ordem, arquivos(${CAMPOS_ARQUIVO})`).in('mensagem_id', msgIds)
-    : { data: [] };
+  const regIds = (registros.data || []).map((r) => r.id);
+  const [arquivos, arquivosRegistros] = await Promise.all([
+    msgIds.length
+      ? supabase.from('recebimento_arquivos').select(`mensagem_id, ordem, arquivos(${CAMPOS_ARQUIVO})`).in('mensagem_id', msgIds)
+      : { data: [] },
+    // Anexos da vistoria agendada (e de registros antigos).
+    regIds.length
+      ? supabase.from('recebimento_arquivos').select(`registro_id, ordem, arquivos(${CAMPOS_ARQUIVO})`).in('registro_id', regIds)
+      : { data: [] },
+  ]);
   const porMensagem = {};
   for (const row of arquivos.data || []) {
     const arquivo = Array.isArray(row.arquivos) ? row.arquivos[0] : row.arquivos;
     if (arquivo) (porMensagem[row.mensagem_id] ||= []).push({ ...arquivo, ordem: row.ordem || 0 });
   }
-  await Promise.all(Object.keys(porMensagem).map(async (k) => {
-    porMensagem[k] = await Promise.all(porMensagem[k].sort((a, b) => a.ordem - b.ordem).map(comUrl));
-  }));
+  const porRegistro = {};
+  for (const row of arquivosRegistros.data || []) {
+    const arquivo = Array.isArray(row.arquivos) ? row.arquivos[0] : row.arquivos;
+    if (arquivo) (porRegistro[row.registro_id] ||= []).push({ ...arquivo, ordem: row.ordem || 0 });
+  }
+  await Promise.all([
+    ...Object.keys(porMensagem).map(async (k) => {
+      porMensagem[k] = await Promise.all(porMensagem[k].sort((a, b) => a.ordem - b.ordem).map(comUrl));
+    }),
+    ...Object.keys(porRegistro).map(async (k) => {
+      porRegistro[k] = await Promise.all(porRegistro[k].sort((a, b) => a.ordem - b.ordem).map(comUrl));
+    }),
+  ]);
   const autores = [...new Set([...msgs.map((m) => m.usuario_id), ...(registros.data || []).map((r) => r.criado_por)].filter(Boolean))];
   const nomes = {};
   if (autores.length) {
@@ -411,7 +567,7 @@ export async function carregarChatUnidade(unidadeId) {
       kind: 'evento',
       id: r.id,
       at: r.tipo === 'vistoria_agendada' ? r.created_at : r.data_evento,
-      registro: { ...r, autorNome: nomes[r.criado_por] || '' },
+      registro: { ...r, autorNome: nomes[r.criado_por] || '', arquivos: porRegistro[r.id] || [] },
     })),
   ];
   return itens.sort((a, b) => String(a.at).localeCompare(String(b.at)));
@@ -434,8 +590,8 @@ export async function enviarMensagemUnidade({ unidadeId, condominioId, userId, t
   return data.id;
 }
 
-export function agendarVistoriaUnidade({ condominioId, unidadeId, userId, titulo, dataEvento }) {
-  return criarRegistro({ condominioId, unidadeId, userId, tipo: 'vistoria_agendada', titulo, dataEvento });
+export function agendarVistoriaUnidade({ condominioId, unidadeId, userId, titulo, descricao, dataEvento, files }) {
+  return criarRegistro({ condominioId, unidadeId, userId, tipo: 'vistoria_agendada', titulo, descricao, dataEvento, files });
 }
 
 export function marcarUnidadeOk({ condominioId, unidadeId, userId }) {

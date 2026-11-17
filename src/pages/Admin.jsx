@@ -7,129 +7,49 @@ import { criarConvite, criarLoginSemTrocarSessao, listarConvites, listarUsuarios
 import { tiposDosMoradores } from '../lib/tipoPorUnidade';
 import { copiarTexto } from '../lib/parseSeed';
 import { conviteUrl } from '../lib/branding';
-import { formatDateTime } from '../lib/format';
-import { tipoDoCondominio } from '../lib/tipoUnidade';
+import { formatDateTime, labelUnidade } from '../lib/format';
+import { ehAreasComuns, ordenarUnidades } from '../lib/recebimento';
 import { Alert, Btn, Empty, Field, MaskedInput, Page } from '../components/ui';
 import { EditTelaButton, useEditTela } from '../components/EditTela';
 import { DetailFields, Modal } from '../components/DataList';
 
 const CARGOS_CONVITE = ['administrador', 'construtora', 'administracao', 'morador'];
-const EMPTY_UNIDADE = { bloco: '', torre: '', casa: '', apartamento: '' };
-
-function limparParte(value) {
-  return String(value || '').trim();
+/** Texto que o backend usa para achar a unidade cadastrada (ex.: 'Bloco A / Apt 101'). */
+function textoDaUnidade(u) {
+  const numero = String(u?.identificacao || '').trim();
+  const bloco = String(u?.bloco || '').trim();
+  return bloco ? `Bloco ${bloco} / Apt ${numero}` : numero;
 }
 
-/** Monta o texto que o backend já entende (ex.: Bloco A / Apt 101). */
-function montarUnidadeTexto({ bloco, torre, casa, apartamento }) {
-  const b = limparParte(bloco).replace(/^(bloco)\s+/i, '');
-  const t = limparParte(torre).replace(/^(torre)\s+/i, '');
-  const c = limparParte(casa).replace(/^(casa)\s+/i, '');
-  const a = limparParte(apartamento).replace(/^(apto|apt\.?|apartamento)\s+/i, '');
-
-  const esquerda = [
-    b ? `Bloco ${b}` : '',
-    t ? `Torre ${t}` : '',
-  ].filter(Boolean).join(' · ');
-
-  const direita = c ? `Casa ${c}` : (a ? `Apt ${a}` : '');
-
-  if (esquerda && direita) return `${esquerda} / ${direita}`;
-  return direita || esquerda || '';
-}
-
-function unidadeDoTipo(value, tipo) {
-  const v = { ...EMPTY_UNIDADE, ...(value || {}) };
-  if (tipo === 'casas') return { ...v, bloco: '', torre: '', apartamento: '' };
-  if (tipo === 'predios') return { ...v, casa: '' };
-  return v;
-}
-
-function validarUnidade(value, tipo) {
-  const v = { ...EMPTY_UNIDADE, ...(value || {}) };
-  if (tipo === 'casas' && (limparParte(v.apartamento) || limparParte(v.torre) || limparParte(v.bloco))) {
-    return 'Este condomínio é de casas. Informe o número da casa, não apartamento.';
-  }
-  if (tipo === 'predios' && limparParte(v.casa)) {
-    return 'Este condomínio é de apartamentos. Informe o apartamento, não casa.';
-  }
-  if (!montarUnidadeTexto(unidadeDoTipo(v, tipo))) {
-    return tipo === 'casas'
-      ? 'Informe a casa do morador.'
-      : tipo === 'predios'
-        ? 'Informe o apartamento do morador.'
-        : 'Informe a casa ou o apartamento do morador.';
-  }
-  return '';
-}
-
-function UnidadeFields({ value, onChange, required, tipo = null }) {
-  const v = unidadeDoTipo(value, tipo);
-  const preview = montarUnidadeTexto(v);
-  const ehCasas = tipo === 'casas';
-  const ehPredios = tipo === 'predios';
-
-  function set(key, next) {
-    onChange({ ...v, [key]: next });
-  }
-
-  return (
-    <div className="unidade-fields stack">
-      <p className="hint" style={{ margin: 0 }}>
-        {ehCasas
-          ? 'Condomínio de casas: informe a casa do morador.'
-          : ehPredios
-            ? 'Condomínio de apartamentos: informe o bloco ou torre e o apartamento.'
-            : 'Preencha o que existir na unidade do morador.'}
+/** Escolha da unidade do morador entre as cadastradas pela Gestão Técnica no Recebimento. */
+function UnidadeSelect({ unidades, carregadas, value, onChange }) {
+  if (carregadas && !unidades.length) {
+    return (
+      <p className='hint unidade-select-vazio'>
+        Nenhuma unidade cadastrada. A Gestão Técnica cadastra os apartamentos em Recebimento → Editar tela → Nova unidade.
       </p>
-      <div className="grid grid-2">
-        {!ehCasas ? (
-          <Field label="Bloco">
-            <input
-              value={v.bloco}
-              onChange={(e) => set('bloco', e.target.value)}
-              placeholder="A, B, 1…"
-            />
-          </Field>
-        ) : null}
-        {!ehCasas ? (
-          <Field label="Torre">
-            <input
-              value={v.torre}
-              onChange={(e) => set('torre', e.target.value)}
-              placeholder="1, Única…"
-            />
-          </Field>
-        ) : null}
-        {!ehPredios ? (
-          <Field label="Casa">
-            <input
-              value={v.casa}
-              onChange={(e) => set('casa', e.target.value)}
-              placeholder="12"
-              required={required && (ehCasas || !limparParte(v.apartamento))}
-            />
-          </Field>
-        ) : null}
-        {!ehCasas ? (
-          <Field label="Apartamento">
-            <input
-              value={v.apartamento}
-              onChange={(e) => set('apartamento', e.target.value)}
-              placeholder="101"
-              required={required && (ehPredios || !limparParte(v.casa))}
-            />
-          </Field>
-        ) : null}
-      </div>
-      {preview ? (
-        <p className="hint unidade-preview">Unidade: <strong>{preview}</strong></p>
-      ) : (
-        <p className="hint">
-          {ehCasas ? 'Informe a casa.' : ehPredios ? 'Informe o apartamento.' : 'Informe ao menos a casa ou o apartamento.'}
-        </p>
-      )}
-    </div>
+    );
+  }
+  const grupos = new Map();
+  for (const u of unidades) {
+    const chave = String(u.bloco || '').trim();
+    if (!grupos.has(chave)) grupos.set(chave, []);
+    grupos.get(chave).push(u);
+  }
+  const variosBlocos = grupos.size > 1;
+  return (
+    <Field label='Unidade'>
+      <select value={value} onChange={(e) => onChange(e.target.value)} required disabled={!carregadas}>
+        <option value=''>{carregadas ? 'Selecione a unidade' : 'Carregando unidades…'}</option>
+        {variosBlocos
+          ? [...grupos.entries()].map(([bloco, lista]) => (
+            <optgroup key={bloco || 'sem-bloco'} label={bloco ? `Bloco ${bloco}` : 'Sem bloco'}>
+              {lista.map((u) => <option key={u.id} value={u.id}>{labelUnidade(u, u.identificacao)}</option>)}
+            </optgroup>
+          ))
+          : unidades.map((u) => <option key={u.id} value={u.id}>{labelUnidade(u, u.identificacao)}</option>)}
+      </select>
+    </Field>
   );
 }
 
@@ -160,27 +80,35 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
   const [tab, setTab] = useState('criar');
   const [tiposApto, setTiposApto] = useState([]);
   const [createForm, setCreateForm] = useState({
-    nome: '', email: '', password: '', cargo: 'morador', unidade: { ...EMPTY_UNIDADE }, tipoAptoId: '',
+    nome: '', email: '', password: '', cargo: 'morador', unidadeId: '',
   });
   const [inviteForm, setInviteForm] = useState({
-    email: '', cargo: 'morador', unidade: { ...EMPTY_UNIDADE }, tipoAptoId: '',
+    email: '', cargo: 'morador', unidadeId: '',
   });
   const [selectedConvite, setSelectedConvite] = useState(null);
-  const [tipoUnidade, setTipoUnidade] = useState(null);
+  // Unidades cadastradas pela Gestão Técnica (tela Recebimento), na mesma ordem de lá.
+  const [unidades, setUnidades] = useState([]);
+  const [unidadesCarregadas, setUnidadesCarregadas] = useState(false);
 
-  useEffect(() => {
-    setCreateForm((prev) => ({ ...prev, unidade: { ...EMPTY_UNIDADE } }));
-    setInviteForm((prev) => ({ ...prev, unidade: { ...EMPTY_UNIDADE } }));
-  }, [tipoUnidade]);
+  async function carregarUnidades() {
+    const consultar = (campos) => supabase.from('unidades').select(campos).eq('condominio_id', condoId);
+    let res = await consultar('id, identificacao, bloco, andar, ordem');
+    if (res.error) res = await consultar('id, identificacao, bloco, andar');
+    setUnidades((res.data || []).filter((u) => !ehAreasComuns(u)).sort(ordenarUnidades));
+    setUnidadesCarregadas(true);
+  }
+
+  function unidadeEscolhida(id) {
+    const unidade = unidades.find((u) => u.id === id);
+    if (!unidade) throw new Error('Selecione a unidade do morador.');
+    return textoDaUnidade(unidade);
+  }
 
   async function load() {
     if (!condoId) return;
     setError('');
-    supabase
-      .from('unidades')
-      .select('identificacao, andar')
-      .eq('condominio_id', condoId)
-      .then(({ data }) => setTipoUnidade(tipoDoCondominio(data)));
+    setUnidadesCarregadas(false);
+    carregarUnidades();
     const tipos = await supabase
       .from('tipos_apartamento')
       .select('id, nome')
@@ -221,9 +149,7 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
     setOk('');
     try {
       const ehMorador = createForm.cargo === 'morador';
-      const erroUnidade = ehMorador ? validarUnidade(createForm.unidade, tipoUnidade) : '';
-      if (erroUnidade) throw new Error(erroUnidade);
-      const unidadeTexto = ehMorador ? montarUnidadeTexto(unidadeDoTipo(createForm.unidade, tipoUnidade)) : null;
+      const unidadeTexto = ehMorador ? unidadeEscolhida(createForm.unidadeId) : null;
 
       let userId = null;
       try {
@@ -244,7 +170,7 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
         unidadeTexto,
         nome: createForm.nome,
       });
-      setCreateForm({ nome: '', email: '', password: '', cargo: 'morador', unidade: { ...EMPTY_UNIDADE }, tipoAptoId: '' });
+      setCreateForm({ nome: '', email: '', password: '', cargo: 'morador', unidadeId: '' });
       setOk('Usuário criado e vinculado a este condomínio.');
       await load();
     } catch (err) {
@@ -261,9 +187,7 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
     setOk('');
     try {
       const ehMorador = inviteForm.cargo === 'morador';
-      const erroUnidade = ehMorador ? validarUnidade(inviteForm.unidade, tipoUnidade) : '';
-      if (erroUnidade) throw new Error(erroUnidade);
-      const unidadeTexto = ehMorador ? montarUnidadeTexto(unidadeDoTipo(inviteForm.unidade, tipoUnidade)) : null;
+      const unidadeTexto = ehMorador ? unidadeEscolhida(inviteForm.unidadeId) : null;
 
       const token = await criarConvite({
         condominioId: condoId,
@@ -275,7 +199,7 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
       setLink(url);
       await copiarTexto(url);
       setOk('Link gerado e copiado. Envie para a pessoa criar o próprio acesso.');
-      setInviteForm({ email: '', cargo: inviteForm.cargo, unidade: { ...EMPTY_UNIDADE }, tipoAptoId: '' });
+      setInviteForm({ email: '', cargo: inviteForm.cargo, unidadeId: '' });
       await load();
     } catch (err) {
       setError(err.message || 'Não foi possível gerar o convite.');
@@ -350,7 +274,7 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
                 <Field label="Cargo">
                   <select
                     value={createForm.cargo}
-                    onChange={(e) => setCreateForm({ ...createForm, cargo: e.target.value, unidade: { ...EMPTY_UNIDADE }, tipoAptoId: '' })}
+                    onChange={(e) => setCreateForm({ ...createForm, cargo: e.target.value, unidadeId: '' })}
                   >
                     {CARGOS_CONVITE.map((tipo) => (
                       <option key={tipo} value={tipo}>{CARGO_LABEL[tipo]}</option>
@@ -359,11 +283,11 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
                 </Field>
                 {createForm.cargo === 'morador' ? (
                   <>
-                    <UnidadeFields
-                      value={createForm.unidade}
-                      onChange={(unidade) => setCreateForm({ ...createForm, unidade })}
-                      tipo={tipoUnidade}
-                      required
+                    <UnidadeSelect
+                      unidades={unidades}
+                      carregadas={unidadesCarregadas}
+                      value={createForm.unidadeId}
+                      onChange={(unidadeId) => setCreateForm({ ...createForm, unidadeId })}
                     />
                     <TipoAptoAviso tipos={tiposApto} />
                   </>
@@ -379,7 +303,7 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
                 <Field label="Cargo">
                   <select
                     value={inviteForm.cargo}
-                    onChange={(e) => setInviteForm({ ...inviteForm, cargo: e.target.value, unidade: { ...EMPTY_UNIDADE }, tipoAptoId: '' })}
+                    onChange={(e) => setInviteForm({ ...inviteForm, cargo: e.target.value, unidadeId: '' })}
                   >
                     {CARGOS_CONVITE.map((tipo) => (
                       <option key={tipo} value={tipo}>{CARGO_LABEL[tipo]}</option>
@@ -388,11 +312,11 @@ export function UsuariosGestaoModal({ open, condoId, condoNome = '', onClose }) 
                 </Field>
                 {inviteForm.cargo === 'morador' ? (
                   <>
-                    <UnidadeFields
-                      value={inviteForm.unidade}
-                      onChange={(unidade) => setInviteForm({ ...inviteForm, unidade })}
-                      tipo={tipoUnidade}
-                      required
+                    <UnidadeSelect
+                      unidades={unidades}
+                      carregadas={unidadesCarregadas}
+                      value={inviteForm.unidadeId}
+                      onChange={(unidadeId) => setInviteForm({ ...inviteForm, unidadeId })}
                     />
                     <TipoAptoAviso tipos={tiposApto} />
                   </>
