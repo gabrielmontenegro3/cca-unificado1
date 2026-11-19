@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useSession } from '../lib/session';
 import { supabaseConfigured } from '../lib/supabase';
+import { CHAVE_SESSAO_EXPIRADA } from '../lib/sessaoSegura';
 import {
   loadBranding,
   loadBrandingConstrutora,
@@ -48,6 +49,20 @@ export function LoginPage() {
   useEffect(() => {
     sessionStorage.removeItem('cca.logoutTo');
   }, []);
+
+  // Saiu porque o login venceu e não deu para renovar (ver sessaoSegura.js).
+  const [sessaoExpirada] = useState(() => {
+    try {
+      return sessionStorage.getItem(CHAVE_SESSAO_EXPIRADA) === '1';
+    } catch {
+      return false;
+    }
+  });
+  // O aviso aparece uma vez só; ao entrar de novo, some.
+  useEffect(() => {
+    if (!session) return;
+    try { sessionStorage.removeItem(CHAVE_SESSAO_EXPIRADA); } catch { /* sem sessionStorage */ }
+  }, [session]);
 
   useEffect(() => {
     let live = true;
@@ -191,6 +206,12 @@ export function LoginPage() {
             <Alert error="Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no arquivo .env" />
           ) : null}
           <Alert error={error} />
+          {sessaoExpirada && !session && !error ? (
+            <p className="auth-sessao-expirada" role="status">
+              <Icon name="lock" size={16} />
+              Sua sessão expirou. Entre novamente.
+            </p>
+          ) : null}
           {session ? (
             loading || (isPortalLogin && !target.tipo) ? (
               <p className="muted">Verificando acesso…</p>

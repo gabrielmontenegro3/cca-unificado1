@@ -228,12 +228,13 @@ async function anexar({ condominioId, userId, files, registroId, mensagemId }) {
   }
 }
 
-export async function criarRegistro({ condominioId, unidadeId, userId, tipo, titulo, descricao, dataEvento, files }) {
+export async function criarRegistro({ condominioId, unidadeId, areaId, userId, tipo, titulo, descricao, dataEvento, files }) {
   const { data, error } = await supabase
     .from('recebimento_registros')
     .insert({
       condominio_id: condominioId,
-      unidade_id: unidadeId,
+      // Área comum (recebimento-areas-comuns.sql) ou unidade (área privativa).
+      ...(areaId ? { area_id: areaId, unidade_id: null } : { unidade_id: unidadeId }),
       tipo,
       titulo: String(titulo || '').trim() || null,
       descricao: String(descricao || '').trim() || null,
@@ -509,10 +510,10 @@ export async function salvarOrdemUnidades(lista, idsAntes) {
 }
 
 /** Chat de uma unidade: mensagens (com anexos) e eventos (vistoria agendada, OK), em ordem. */
-export async function carregarChatUnidade(unidadeId) {
+export async function carregarChatUnidade(unidadeId, campo = 'unidade_id') {
   const [mensagens, registros] = await Promise.all([
-    supabase.from('recebimento_mensagens').select('*').eq('unidade_id', unidadeId).order('created_at'),
-    supabase.from('recebimento_registros').select('*').eq('unidade_id', unidadeId).order('data_evento'),
+    supabase.from('recebimento_mensagens').select('*').eq(campo, unidadeId).order('created_at'),
+    supabase.from('recebimento_registros').select('*').eq(campo, unidadeId).order('data_evento'),
   ]);
   if (mensagens.error) throw mensagens.error;
   if (registros.error) throw registros.error;
@@ -573,13 +574,13 @@ export async function carregarChatUnidade(unidadeId) {
   return itens.sort((a, b) => String(a.at).localeCompare(String(b.at)));
 }
 
-export async function enviarMensagemUnidade({ unidadeId, condominioId, userId, texto, files }) {
+export async function enviarMensagemUnidade({ unidadeId, areaId, condominioId, userId, texto, files }) {
   const corpo = String(texto || '').trim();
   if (!corpo && !files?.length) throw new Error('Escreva a mensagem ou anexe um arquivo.');
   const { data, error } = await supabase
     .from('recebimento_mensagens')
     .insert({
-      unidade_id: unidadeId,
+      ...(areaId ? { area_id: areaId } : { unidade_id: unidadeId }),
       condominio_id: condominioId,
       texto: corpo || (files?.length === 1 ? `Arquivo: ${files[0].name}` : 'Arquivos anexados'),
     })
@@ -590,43 +591,168 @@ export async function enviarMensagemUnidade({ unidadeId, condominioId, userId, t
   return data.id;
 }
 
-export function agendarVistoriaUnidade({ condominioId, unidadeId, userId, titulo, descricao, dataEvento, files }) {
-  return criarRegistro({ condominioId, unidadeId, userId, tipo: 'vistoria_agendada', titulo, descricao, dataEvento, files });
+export function agendarVistoriaUnidade({ condominioId, unidadeId, areaId, userId, titulo, descricao, dataEvento, files }) {
+  return criarRegistro({ condominioId, unidadeId, areaId, userId, tipo: 'vistoria_agendada', titulo, descricao, dataEvento, files });
 }
 
-export function marcarUnidadeOk({ condominioId, unidadeId, userId }) {
-  return criarRegistro({ condominioId, unidadeId, userId, tipo: 'assinatura_entrega', titulo: 'Entrega OK' });
+export function marcarUnidadeOk({ condominioId, unidadeId, areaId, userId }) {
+  return criarRegistro({ condominioId, unidadeId, areaId, userId, tipo: 'assinatura_entrega', titulo: 'Entrega OK' });
 }
 
-export async function desmarcarUnidadeOk(unidadeId) {
-  const { error } = await supabase.from('recebimento_registros').delete().eq('unidade_id', unidadeId).eq('tipo', 'assinatura_entrega');
+export async function desmarcarUnidadeOk(unidadeId, campo = 'unidade_id') {
+  const { error } = await supabase.from('recebimento_registros').delete().eq(campo, unidadeId).eq('tipo', 'assinatura_entrega');
   if (error) throw error;
+}
+
+/* ---------- Áreas comuns (recebimento-areas-comuns.sql) ---------- */
+
+export const SQL_RECEBIMENTO_AREAS = 'supabase/recebimento-areas-comuns.sql';
+
+export function mensagemErroAreas(err) {
+  const msg = String(err?.message || err || '');
+  if (/recebimento_areas|area_id|schema cache|does not exist|42P01|42703|PGRST20[045]/i.test(msg)) {
+    return `Rode o arquivo ${SQL_RECEBIMENTO_AREAS} no SQL Editor do Supabase e tente de novo.`;
+  }
+  if (/row-level security|permission|42501/i.test(msg)) {
+    return 'Sem permissão para alterar as áreas comuns deste condomínio.';
+  }
+  return msg || 'Não foi possível concluir.';
+}
+
+/** Áreas comuns do condomínio com a situação do chat de cada uma (mesmo formato das unidades). */
+export async function listarChatsAreas(condoId) {
+  const [areas, registros, mensagens] = await Promise.all([
+    supabase.from('recebimento_areas').select('id, nome, ordem').eq('condominio_id', condoId),
+    supabase.from('recebimento_registros').select('id, area_id, tipo, titulo, data_evento').eq('condominio_id', condoId),
+    supabase.from('recebimento_mensagens').select('id, area_id, texto, autor_papel, created_at').eq('condominio_id', condoId).order('created_at'),
+  ]);
+  if (areas.error) throw areas.error;
+  if (registros.error) throw registros.error;
+  if (mensagens.error) throw mensagens.error;
+  const regs = {};
+  for (const r of registros.data || []) if (r.area_id) (regs[r.area_id] ||= []).push(r);
+  const msgs = {};
+  for (const m of mensagens.data || []) if (m.area_id) (msgs[m.area_id] ||= []).push(m);
+  return (areas.data || [])
+    .map((a) => {
+      const lista = msgs[a.id] || [];
+      const ultima = lista[lista.length - 1] || null;
+      const eventos = regs[a.id] || [];
+      const agendada = eventos.filter((r) => r.tipo === 'vistoria_agendada').sort((x, y) => String(y.data_evento).localeCompare(String(x.data_evento)))[0];
+      return {
+        ...a,
+        identificacao: a.nome,
+        rotulo: a.nome,
+        status: statusChatDe(eventos, lista.length),
+        totalMensagens: lista.length,
+        preview: ultima ? previewMensagem(ultima) : agendada ? `Vistoria: ${agendada.titulo || 'agendada'}` : '',
+      };
+    })
+    .sort((a, b) => {
+      const oa = Number.isInteger(a.ordem) ? a.ordem : Number.MAX_SAFE_INTEGER;
+      const ob = Number.isInteger(b.ordem) ? b.ordem : Number.MAX_SAFE_INTEGER;
+      return oa - ob || a.nome.localeCompare(b.nome, 'pt-BR', { numeric: true });
+    });
+}
+
+function mesmoNome(a, b) {
+  return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+}
+
+/** Cria áreas comuns (pula nomes que já existem). */
+export async function criarAreas(condoId, nomes, existentes) {
+  const jaTem = [...existentes];
+  let proxima = existentes.reduce((max, a) => (Number.isInteger(a.ordem) ? Math.max(max, a.ordem) : max), -1) + 1;
+  const lista = [];
+  let repetidas = 0;
+  for (const bruto of nomes) {
+    const nome = String(bruto || '').trim();
+    if (!nome) continue;
+    if (jaTem.some((a) => mesmoNome(a.nome, nome))) {
+      repetidas += 1;
+      continue;
+    }
+    lista.push({ condominio_id: condoId, nome, ordem: proxima });
+    jaTem.push({ nome });
+    proxima += 1;
+  }
+  if (lista.length) {
+    const { error } = await supabase.from('recebimento_areas').insert(lista);
+    if (error) throw error;
+  }
+  return { criadas: lista.length, repetidas };
+}
+
+export async function editarArea(area, nome, existentes) {
+  const limpo = String(nome || '').trim();
+  if (!limpo) throw new Error('Informe o nome da área.');
+  if (existentes.some((a) => a.id !== area.id && mesmoNome(a.nome, limpo))) throw new Error(`Já existe a área "${limpo}".`);
+  const { error } = await supabase.from('recebimento_areas').update({ nome: limpo }).eq('id', area.id);
+  if (error) throw error;
+}
+
+export async function excluirArea(areaId) {
+  const { error } = await supabase.from('recebimento_areas').delete().eq('id', areaId);
+  if (error) throw error;
+}
+
+export async function salvarOrdemAreas(lista, idsAntes) {
+  const mudaram = lista
+    .map((a, ordem) => ({ a, ordem }))
+    .filter(({ a, ordem }) => idsAntes[ordem] !== a.id || a.ordem !== ordem);
+  if (!mudaram.length) return;
+  const resultados = await Promise.all(mudaram.map(({ a, ordem }) => supabase
+    .from('recebimento_areas')
+    .update({ ordem })
+    .eq('id', a.id)));
+  const falha = resultados.find((r) => r.error);
+  if (falha) throw falha.error;
+}
+
+/** Nomes dos Locais cadastrados no condomínio (para trazer como áreas comuns). */
+export async function nomesDosLocais(condoId) {
+  const { data, error } = await supabase.from('locais').select('nome').eq('condominio_id', condoId);
+  if (error) throw error;
+  return (data || []).map((l) => String(l.nome || '').trim()).filter(Boolean);
 }
 
 /** Construtora: chats de recebimento com atividade, de todos os condomínios. */
 export async function listarChatsRecebimentoGlobal() {
-  const [registros, mensagens] = await Promise.all([
-    supabase.from('recebimento_registros').select('unidade_id, condominio_id, tipo, titulo, data_evento, unidades(id, identificacao, bloco, andar), condominios(id, nome)'),
-    supabase.from('recebimento_mensagens').select('unidade_id, condominio_id, texto, autor_papel, created_at, unidades(id, identificacao, bloco, andar), condominios(id, nome)').order('created_at'),
+  const consultar = (comAreas) => Promise.all([
+    supabase.from('recebimento_registros').select(`unidade_id, ${comAreas ? 'area_id, recebimento_areas(id, nome), ' : ''}condominio_id, tipo, titulo, data_evento, unidades(id, identificacao, bloco, andar), condominios(id, nome)`),
+    supabase.from('recebimento_mensagens').select(`unidade_id, ${comAreas ? 'area_id, recebimento_areas(id, nome), ' : ''}condominio_id, texto, autor_papel, created_at, unidades(id, identificacao, bloco, andar), condominios(id, nome)`).order('created_at'),
   ]);
+  // Sem o recebimento-areas-comuns.sql rodado, lista só as áreas privativas.
+  let [registros, mensagens] = await consultar(true);
+  if (registros.error || mensagens.error) [registros, mensagens] = await consultar(false);
   if (registros.error) throw registros.error;
   if (mensagens.error) throw mensagens.error;
   const porUnidade = new Map();
   const garantir = (row) => {
-    if (!row.unidade_id) return null;
-    if (!porUnidade.has(row.unidade_id)) {
-      const unidade = Array.isArray(row.unidades) ? row.unidades[0] : row.unidades;
+    const id = row.area_id || row.unidade_id;
+    if (!id) return null;
+    if (!porUnidade.has(id)) {
       const condominio = Array.isArray(row.condominios) ? row.condominios[0] : row.condominios;
-      porUnidade.set(row.unidade_id, {
-        unidadeId: row.unidade_id,
+      let rotulo;
+      if (row.area_id) {
+        const area = Array.isArray(row.recebimento_areas) ? row.recebimento_areas[0] : row.recebimento_areas;
+        rotulo = area?.nome || 'Área comum';
+      } else {
+        const unidade = Array.isArray(row.unidades) ? row.unidades[0] : row.unidades;
+        rotulo = labelUnidade(unidade, 'Unidade');
+      }
+      porUnidade.set(id, {
+        // "unidadeId" fica como id genérico do chat (unidade ou área comum).
+        unidadeId: id,
+        tipo: row.area_id ? 'comuns' : 'privativas',
         condominioId: row.condominio_id,
-        rotulo: labelUnidade(unidade, 'Unidade'),
+        rotulo,
         condominio: condominio?.nome || 'Condomínio',
         registros: [],
         mensagens: [],
       });
     }
-    return porUnidade.get(row.unidade_id);
+    return porUnidade.get(id);
   };
   for (const r of registros.data || []) garantir(r)?.registros.push(r);
   for (const m of mensagens.data || []) garantir(m)?.mensagens.push(m);

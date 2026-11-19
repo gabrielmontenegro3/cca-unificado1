@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 import { supabase, supabaseConfigured } from './supabase';
 import { loadBranding, rememberBrandCondo, forgetBrandCondo } from './branding';
 import { CARGO_LABEL } from './permissions';
+import { conferirRelogio } from './sessaoSegura';
 import {
   aplicarPrefs,
   bootstrapPrefs,
@@ -438,6 +439,8 @@ export function SessionProvider({ children }) {
     const { data: sub } = supabase.auth.onAuthStateChange((event, next) => {
       if (event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
         if (next) setSession(next);
+        // Credencial recém-emitida pelo servidor: dá para conferir o relógio do computador.
+        if (event === 'TOKEN_REFRESHED' && next?.access_token) conferirRelogio(next.access_token);
         return;
       }
       if (event === 'INITIAL_SESSION' && ready.current) return;
@@ -560,7 +563,10 @@ export function SessionProvider({ children }) {
           salvarPortalLogin(null);
           throw err;
         }
-        if (data.session) await supabase.auth.setSession(data.session);
+        if (data.session) {
+          conferirRelogio(data.session.access_token);
+          await supabase.auth.setSession(data.session);
+        }
         const acesso = await avaliarAcessoLogin(data.user, {
           condominioId: condominioId || '',
           construtoraId: construtoraId || '',

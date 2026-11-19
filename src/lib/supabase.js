@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { criarFetchSeguro, registrarClienteSupabase } from './sessaoSegura';
 
 const url = import.meta.env.VITE_SUPABASE_URL;
 const anon = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -12,5 +13,9 @@ export const supabase = supabaseConfigured
         autoRefreshToken: true,
         detectSessionInUrl: true,
       },
+      // Se o login vencer, renova e repete a requisição (ver sessaoSegura.js).
+      global: { fetch: criarFetchSeguro() },
     })
   : null;
+
+if (supabase) registrarClienteSupabase(supabase);

@@ -167,12 +167,16 @@ export function can(tipo, action) {
 function grupoMeuImovel(tipo, { ehCasas } = {}) {
   const t = String(tipo || '').toLowerCase().trim();
   const isAdminCondo = t === 'administracao';
+  // Áreas privativas: síndico e administração não veem. Áreas comuns: morador não vê.
+  const veAreasPrivativas = t !== 'administrador' && t !== 'administracao';
+  const veAreasComuns = t !== 'morador';
   return {
     id: 'meu-imovel',
     label: 'Meu imóvel',
     icon: 'door',
     items: [
-      { to: '/recebimento', label: 'Recebimento', icon: 'doorClosed' },
+      ...(veAreasPrivativas ? [{ to: '/recebimento', label: 'Recebimento das áreas privativas', icon: 'doorClosed' }] : []),
+      ...(veAreasComuns ? [{ to: '/recebimento-areas-comuns', label: 'Recebimento das áreas comuns', icon: 'building' }] : []),
       ...(!isAdminCondo ? [{
         to: '/meu-apartamento',
         label: ehCasas ? 'Meu imóvel' : 'Meu apto',

@@ -53,6 +53,7 @@ function rotaSistemaCondominio(pathname) {
     '/contatos',
     '/meu-imovel',
     '/recebimento',
+    '/recebimento-areas-comuns',
     '/manual-uso',
     '/tipo-apto',
     '/meu-apartamento',
@@ -204,8 +205,10 @@ export default function App() {
         <Route path="painel" element={<Navigate to="/visao-geral" replace />} />
         <Route path="visao-geral" element={<VisaoGeralRoute />} />
         <Route path="meu-imovel" element={<Navigate to="/recebimento" replace />} />
-        <Route path="recebimento" element={<RecebimentoPage />} />
-        <Route path="recebimento/:unidadeId" element={<RecebimentoPage />} />
+        <Route path="recebimento" element={<RecebimentoPage modo="privativas" />} />
+        <Route path="recebimento/:unidadeId" element={<RecebimentoPage modo="privativas" />} />
+        <Route path="recebimento-areas-comuns" element={<RecebimentoPage modo="comuns" />} />
+        <Route path="recebimento-areas-comuns/:unidadeId" element={<RecebimentoPage modo="comuns" />} />
         <Route path="construtora-recebimento" element={<RecebimentoConstrutoraPage />} />
         <Route path="construtora-recebimento/:registroId" element={<RecebimentoConstrutoraPage />} />
         <Route path="manual-uso" element={<ManualUsoPage />} />

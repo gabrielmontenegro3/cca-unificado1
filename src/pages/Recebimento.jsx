@@ -9,15 +9,22 @@ import {
   agendarVistoriaUnidade,
   carregarChatUnidade,
   contarMoradoresUnidade,
+  criarAreas,
   criarUnidades,
   desmarcarUnidadeOk,
+  editarArea,
   editarUnidade,
   enviarMensagemUnidade,
+  excluirArea,
   excluirUnidade,
+  listarChatsAreas,
   listarChatsUnidades,
   marcarUnidadeOk,
+  mensagemErroAreas,
   mensagemErroRecebimentoChat,
   mensagemErroUnidade,
+  nomesDosLocais,
+  salvarOrdemAreas,
   salvarOrdemUnidades,
   unidadesDoMorador,
 } from '../lib/recebimento';
@@ -156,7 +163,7 @@ function EventoChat({ registro }) {
         <span className="rec-evento-ok-selo" aria-hidden="true"><Icon name="check" size={18} /></span>
         <div className="chat-event-copy">
           <strong>Entrega OK</strong>
-          <span>Imóvel entregue sem pendências{registro.autorNome ? ` · ${registro.autorNome}` : ''}</span>
+          <span>{registro.area_id ? 'Área entregue' : 'Imóvel entregue'} sem pendências{registro.autorNome ? ` · ${registro.autorNome}` : ''}</span>
         </div>
         <time>{formatChatTime(registro.data_evento)}</time>
       </div>
@@ -435,13 +442,128 @@ function UnidadeModal({ open, unidade, busy, onClose, onCriar, onEditar }) {
 
 /* ---------- Tela ---------- */
 
-export function RecebimentoPage() {
+/** Gestão Técnica: cadastrar ou renomear uma área comum (piscina, salão de festas…). */
+function AreaModal({ open, area, busy, condoId, onClose, onCriar, onEditar }) {
+  const editando = Boolean(area);
+  const [nome, setNome] = useState('');
+  const [erro, setErro] = useState('');
+  const [trazendo, setTrazendo] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setNome(area?.nome || '');
+    setErro('');
+  }, [open, area]);
+
+  async function salvar(e) {
+    e.preventDefault();
+    setErro('');
+    try {
+      if (!nome.trim()) throw new Error('Informe o nome da área.');
+      if (editando) await onEditar(nome);
+      else await onCriar([nome]);
+    } catch (err) {
+      setErro(err.message || 'Não foi possível salvar.');
+    }
+  }
+
+  async function trazerLocais() {
+    setErro('');
+    setTrazendo(true);
+    try {
+      const nomes = await nomesDosLocais(condoId);
+      if (!nomes.length) throw new Error('Nenhum local cadastrado na tela Locais.');
+      await onCriar(nomes);
+    } catch (err) {
+      setErro(err.message || 'Não foi possível trazer os locais.');
+    } finally {
+      setTrazendo(false);
+    }
+  }
+
+  return (
+    <Modal
+      open={open}
+      title={editando ? `Editar ${area?.nome || 'área'}` : 'Nova área comum'}
+      className="modal-sheet--trace rec-modal"
+      onClose={busy ? undefined : onClose}
+      footer={(
+        <>
+          <Btn variant="ghost" onClick={onClose} disabled={busy}>Cancelar</Btn>
+          <Btn type="submit" form="rec-area" icon={editando ? 'check' : 'plus'} disabled={busy}>
+            {busy ? 'Salvando…' : editando ? 'Salvar' : 'Criar área'}
+          </Btn>
+        </>
+      )}
+    >
+      <form id="rec-area" className="stack" onSubmit={salvar}>
+        <Alert error={erro} />
+        <Field label="Nome da área">
+          <input
+            value={nome}
+            onChange={(e) => setNome(e.target.value)}
+            placeholder="Ex.: Piscina, Salão de festas, Hall de entrada"
+            autoFocus
+            required
+          />
+        </Field>
+        {!editando ? (
+          <div className="rec-area-locais">
+            <p className="hint">Já cadastrou os locais do condomínio na tela Locais? Traga todos de uma vez (os que já existem aqui são pulados).</p>
+            <Btn variant="ghost" icon="map" onClick={trazerLocais} disabled={busy || trazendo}>
+              {trazendo ? 'Trazendo…' : 'Trazer os Locais cadastrados'}
+            </Btn>
+          </div>
+        ) : null}
+      </form>
+    </Modal>
+  );
+}
+
+/** As duas telas de recebimento usam a mesma página; muda só o que é listado e quem vê. */
+const MODOS_RECEBIMENTO = {
+  privativas: {
+    titulo: 'Recebimento das áreas privativas',
+    rota: '/recebimento',
+    campo: 'unidade_id',
+    icone: 'door',
+    item: 'unidade',
+    itens: 'unidades',
+    voltar: 'Unidades',
+  },
+  comuns: {
+    titulo: 'Recebimento das áreas comuns',
+    rota: '/recebimento-areas-comuns',
+    campo: 'area_id',
+    icone: 'building',
+    item: 'área',
+    itens: 'áreas',
+    voltar: 'Áreas comuns',
+  },
+};
+
+/** Cargos do condomínio que não veem as áreas privativas (síndico e administração). */
+function ehEquipeDoCondominio(cargoTipo) {
+  return ['administrador', 'administracao'].includes(String(cargoTipo || '').toLowerCase());
+}
+
+export function RecebimentoPage({ modo = 'privativas' }) {
+  const cfg = MODOS_RECEBIMENTO[modo] || MODOS_RECEBIMENTO.privativas;
+  const comuns = modo === 'comuns';
   const { unidadeId } = useParams();
   const navigate = useNavigate();
   const { condoId, session, cargoTipo, isGestaoTecnica, isConstrutoraOrg } = useSession();
   const ehMorador = String(cargoTipo || '').toLowerCase() === 'morador';
   const ehConstrutora = isConstrutoraOrg || ehCargoConstrutora(cargoTipo);
+  const ehEquipe = ehEquipeDoCondominio(cargoTipo) && !isGestaoTecnica;
+  // Privativas: síndico/administração não veem. Comuns: morador não vê.
+  const semAcesso = comuns ? ehMorador && !isGestaoTecnica : ehEquipe;
+  // Só Gestão Técnica e construtora conversam; o resto só visualiza.
   const podeEscrever = isGestaoTecnica || ehConstrutora;
+  const erroChat = comuns ? mensagemErroAreas : mensagemErroRecebimentoChat;
+  const erroCadastro = comuns ? mensagemErroAreas : mensagemErroUnidade;
+  const alvoDe = (item) => (comuns ? { areaId: item.id } : { unidadeId: item.id });
+  const linkDe = (id) => `${cfg.rota}/${id}`;
 
   const [unidades, setUnidades] = useState([]);
   const [carregado, setCarregado] = useState(false);
@@ -453,62 +575,80 @@ export function RecebimentoPage() {
   const [sending, setSending] = useState(false);
   const [busy, setBusy] = useState(false);
   const [agendar, setAgendar] = useState(false);
-  // Cadastro das unidades: só a Gestão Técnica, em "Editar tela".
+  // Cadastro das unidades/áreas: só a Gestão Técnica, em "Editar tela".
   const [editando, setEditando] = useState(false);
-  const [unidadeModal, setUnidadeModal] = useState(null); // null | 'nova' | unidade
+  const [unidadeModal, setUnidadeModal] = useState(null); // null | 'nova' | item
   const [okUnidades, setOkUnidades] = useState('');
   const editandoRef = useRef(false);
   editandoRef.current = editando;
   const chatLogRef = useRef(null);
 
   const aberta = unidades.find((u) => u.id === unidadeId) || null;
-  const semOrdem = unidades.length > 0 && unidades.every((u) => !('ordem' in u));
+  const semOrdem = !comuns && unidades.length > 0 && unidades.every((u) => !('ordem' in u));
+
+  // Ao trocar entre as duas telas, a página é reaproveitada: começa limpa.
+  useEffect(() => {
+    setUnidades([]);
+    setItens([]);
+    setCarregado(false);
+    setEditando(false);
+    setQ('');
+    setFiltro('');
+    setOkUnidades('');
+    setError('');
+  }, [modo]);
 
   async function loadLista() {
-    if (!condoId) return;
+    if (!condoId || semAcesso) return;
     try {
-      let somenteIds = null;
-      if (ehMorador) {
-        const minhas = await unidadesDoMorador(condoId, session.user.id);
-        somenteIds = minhas.map((u) => u.id);
+      let lista;
+      if (comuns) {
+        lista = await listarChatsAreas(condoId);
+      } else {
+        let somenteIds = null;
+        if (ehMorador) {
+          // O morador vê só o(s) apartamento(s) ligado(s) a ele.
+          const minhas = await unidadesDoMorador(condoId, session.user.id);
+          somenteIds = minhas.map((u) => u.id);
+        }
+        lista = await listarChatsUnidades(condoId, { somenteIds });
       }
-      const lista = await listarChatsUnidades(condoId, { somenteIds });
       setUnidades(lista);
       setError('');
       // Morador com um só imóvel: abre direto o chat dele.
-      if (ehMorador && !unidadeId && lista.length === 1) navigate(`/recebimento/${lista[0].id}`, { replace: true });
+      if (!comuns && ehMorador && !unidadeId && lista.length === 1) navigate(linkDe(lista[0].id), { replace: true });
     } catch (err) {
-      setError(mensagemErroRecebimentoChat(err));
+      setError(erroChat(err));
     } finally {
       setCarregado(true);
     }
   }
 
   async function loadChat(id = unidadeId) {
-    if (!id) {
+    if (!id || semAcesso) {
       setItens([]);
       return;
     }
     try {
-      setItens(await carregarChatUnidade(id));
+      setItens(await carregarChatUnidade(id, cfg.campo));
     } catch (err) {
-      setError(mensagemErroRecebimentoChat(err));
+      setError(erroChat(err));
     }
   }
 
-  useEffect(() => { loadLista(); }, [condoId, ehMorador, session?.user?.id]);
-  useEffect(() => { loadChat(unidadeId); }, [unidadeId]);
+  useEffect(() => { loadLista(); }, [condoId, ehMorador, session?.user?.id, modo, semAcesso]);
+  useEffect(() => { loadChat(unidadeId); }, [unidadeId, modo]);
 
   // Atualiza o chat aberto de tempos em tempos (mensagens da outra parte).
   useEffect(() => {
     if (!unidadeId) return undefined;
     const t = setInterval(() => {
       loadChat(unidadeId);
-      // Enquanto a Gestão Técnica organiza as unidades, a lista não é recarregada por baixo.
+      // Enquanto a Gestão Técnica organiza a lista, ela não é recarregada por baixo.
       if (!editandoRef.current) loadLista();
     }, 20000);
     return () => clearInterval(t);
-  }, [unidadeId, condoId]);
+  }, [unidadeId, condoId, modo]);
 
   useEffect(() => {
     const el = chatLogRef.current;
@@ -530,11 +670,11 @@ export function RecebimentoPage() {
     setSending(true);
     setError('');
     try {
-      await enviarMensagemUnidade({ unidadeId: aberta.id, condominioId: condoId, userId: session.user.id, texto });
+      await enviarMensagemUnidade({ ...alvoDe(aberta), condominioId: condoId, userId: session.user.id, texto });
       setTexto('');
       await Promise.all([loadChat(), loadLista()]);
     } catch (err) {
-      setError(mensagemErroRecebimentoChat(err));
+      setError(erroChat(err));
     } finally {
       setSending(false);
     }
@@ -545,10 +685,10 @@ export function RecebimentoPage() {
     setSending(true);
     setError('');
     try {
-      await enviarMensagemUnidade({ unidadeId: aberta.id, condominioId: condoId, userId: session.user.id, texto: '', files: [file] });
+      await enviarMensagemUnidade({ ...alvoDe(aberta), condominioId: condoId, userId: session.user.id, texto: '', files: [file] });
       await Promise.all([loadChat(), loadLista()]);
     } catch (err) {
-      setError(mensagemErroRecebimentoChat(err));
+      setError(erroChat(err));
     } finally {
       setSending(false);
     }
@@ -558,11 +698,11 @@ export function RecebimentoPage() {
     setBusy(true);
     setError('');
     try {
-      await agendarVistoriaUnidade({ condominioId: condoId, unidadeId: aberta.id, userId: session.user.id, titulo, descricao, dataEvento, files });
+      await agendarVistoriaUnidade({ ...alvoDe(aberta), condominioId: condoId, userId: session.user.id, titulo, descricao, dataEvento, files });
       setAgendar(false);
       await Promise.all([loadChat(), loadLista()]);
     } catch (err) {
-      setError(mensagemErroRecebimentoChat(err));
+      setError(erroChat(err));
       setAgendar(false);
       // A vistoria pode ter sido criada antes de um anexo falhar: mostra o que ficou salvo.
       await Promise.all([loadChat(), loadLista()]);
@@ -575,13 +715,17 @@ export function RecebimentoPage() {
     setBusy(true);
     setOkUnidades('');
     try {
-      const { criadas, repetidas } = await criarUnidades(condoId, novas, unidades, { comOrdem: !semOrdem });
-      if (!criadas) throw new Error(repetidas === 1 ? 'Essa unidade já existe.' : 'Todas essas unidades já existem.');
+      const { criadas, repetidas } = comuns
+        ? await criarAreas(condoId, novas, unidades)
+        : await criarUnidades(condoId, novas, unidades, { comOrdem: !semOrdem });
+      if (!criadas) {
+        throw new Error(repetidas === 1 ? `Essa ${cfg.item} já existe.` : `Todas essas ${cfg.itens} já existem.`);
+      }
       setUnidadeModal(null);
-      setOkUnidades(`${criadas === 1 ? '1 unidade criada' : `${criadas} unidades criadas`}${repetidas ? ` · ${repetidas} já existia(m) e foi(ram) pulada(s)` : ''}.`);
+      setOkUnidades(`${criadas === 1 ? `1 ${cfg.item} criada` : `${criadas} ${cfg.itens} criadas`}${repetidas ? ` · ${repetidas} já existia(m) e foi(ram) pulada(s)` : ''}.`);
       await loadLista();
     } catch (err) {
-      throw new Error(mensagemErroUnidade(err));
+      throw new Error(erroCadastro(err));
     } finally {
       setBusy(false);
     }
@@ -592,12 +736,13 @@ export function RecebimentoPage() {
     setBusy(true);
     setOkUnidades('');
     try {
-      await editarUnidade(unidadeModal, dados, unidades);
+      if (comuns) await editarArea(unidadeModal, dados, unidades);
+      else await editarUnidade(unidadeModal, dados, unidades);
       setUnidadeModal(null);
-      setOkUnidades('Unidade atualizada.');
+      setOkUnidades(comuns ? 'Área atualizada.' : 'Unidade atualizada.');
       await loadLista();
     } catch (err) {
-      throw new Error(mensagemErroUnidade(err));
+      throw new Error(erroCadastro(err));
     } finally {
       setBusy(false);
     }
@@ -606,23 +751,26 @@ export function RecebimentoPage() {
   async function apagarUnidade(u) {
     setError('');
     setOkUnidades('');
-    const moradores = await contarMoradoresUnidade(u.id);
-    if (moradores) {
-      setError(`${u.rotulo} tem ${moradores === 1 ? '1 morador vinculado' : `${moradores} moradores vinculados`}. Desvincule antes de excluir.`);
-      return;
+    if (!comuns) {
+      const moradores = await contarMoradoresUnidade(u.id);
+      if (moradores) {
+        setError(`${u.rotulo} tem ${moradores === 1 ? '1 morador vinculado' : `${moradores} moradores vinculados`}. Desvincule antes de excluir.`);
+        return;
+      }
     }
     const aviso = u.status !== 'sem_vistoria'
-      ? `Excluir ${u.rotulo}? O chat de recebimento desta unidade também será apagado. Não dá para desfazer.`
+      ? `Excluir ${u.rotulo}? O chat de recebimento desta ${cfg.item} também será apagado. Não dá para desfazer.`
       : `Excluir ${u.rotulo}? Não dá para desfazer.`;
     if (!window.confirm(aviso)) return;
     setBusy(true);
     try {
-      await excluirUnidade(u.id);
-      if (u.id === unidadeId) navigate('/recebimento');
+      if (comuns) await excluirArea(u.id);
+      else await excluirUnidade(u.id);
+      if (u.id === unidadeId) navigate(cfg.rota);
       setOkUnidades(`${u.rotulo} excluída.`);
       await loadLista();
     } catch (err) {
-      setError(mensagemErroUnidade(err));
+      setError(erroCadastro(err));
     } finally {
       setBusy(false);
     }
@@ -632,11 +780,12 @@ export function RecebimentoPage() {
     setError('');
     setOkUnidades('');
     try {
-      await salvarOrdemUnidades(lista, idsAntes);
+      if (comuns) await salvarOrdemAreas(lista, idsAntes);
+      else await salvarOrdemUnidades(lista, idsAntes);
       setUnidades((atual) => atual.map((u) => ({ ...u, ordem: lista.findIndex((x) => x.id === u.id) })));
-      setOkUnidades('Ordem das unidades salva.');
+      setOkUnidades(`Ordem das ${cfg.itens} salva.`);
     } catch (err) {
-      setError(mensagemErroUnidade(err));
+      setError(erroCadastro(err));
       await loadLista();
     }
   }
@@ -655,28 +804,54 @@ export function RecebimentoPage() {
     if (!aberta) return;
     const ok = aberta.status === 'ok';
     const pergunta = ok
-      ? `Remover o OK de ${aberta.rotulo}? A unidade volta a ficar em andamento.`
+      ? `Remover o OK de ${aberta.rotulo}? A ${cfg.item} volta a ficar em andamento.`
       : `Marcar ${aberta.rotulo} como OK? Significa que a entrega foi concluída sem pendências.`;
     if (!window.confirm(pergunta)) return;
     setBusy(true);
     setError('');
     try {
-      if (ok) await desmarcarUnidadeOk(aberta.id);
-      else await marcarUnidadeOk({ condominioId: condoId, unidadeId: aberta.id, userId: session.user.id });
+      if (ok) await desmarcarUnidadeOk(aberta.id, cfg.campo);
+      else await marcarUnidadeOk({ ...alvoDe(aberta), condominioId: condoId, userId: session.user.id });
       await Promise.all([loadChat(), loadLista()]);
     } catch (err) {
-      setError(mensagemErroRecebimentoChat(err));
+      setError(erroChat(err));
     } finally {
       setBusy(false);
     }
   }
 
+  if (semAcesso) {
+    return (
+      <Page title={cfg.titulo} className="page-suporte page-recebimento">
+        <Empty
+          text={comuns
+            ? 'O recebimento das áreas comuns é acompanhado pela administração do condomínio, Gestão Técnica e construtora.'
+            : 'O recebimento das áreas privativas é acompanhado por cada morador, pela Gestão Técnica e pela construtora.'}
+        />
+      </Page>
+    );
+  }
+
+  const lead = comuns
+    ? (podeEscrever
+      ? 'Um chat por área comum entre a Gestão Técnica e a construtora sobre a vistoria de entrega.'
+      : 'Acompanhe a vistoria de entrega das áreas comuns. A conversa é entre a Gestão Técnica e a construtora.')
+    : ehMorador
+      ? 'Acompanhe a vistoria de entrega do seu imóvel. A conversa é entre a Gestão Técnica e a construtora.'
+      : 'Um chat por unidade entre a Gestão Técnica e a construtora sobre a vistoria de entrega.';
+
+  const vazio = !comuns && ehMorador
+    ? 'Seu usuário ainda não está ligado a uma unidade.'
+    : unidades.length
+      ? `Nenhuma ${cfg.item} encontrada.`
+      : isGestaoTecnica
+        ? `Nenhuma ${cfg.item} cadastrada. Clique em "Editar tela" e depois em "${comuns ? 'Nova área' : 'Nova unidade'}".`
+        : `Nenhuma ${cfg.item} cadastrada ainda.`;
+
   return (
     <Page
-      title="Recebimento"
-      lead={ehMorador
-        ? 'Acompanhe a vistoria de entrega do seu imóvel. A conversa é entre a Gestão Técnica e a construtora.'
-        : 'Um chat por unidade entre a Gestão Técnica e a construtora sobre a vistoria de entrega.'}
+      title={cfg.titulo}
+      lead={lead}
       className="page-suporte page-recebimento"
       actions={isGestaoTecnica ? (
         <EditTelaButton
@@ -686,11 +861,11 @@ export function RecebimentoPage() {
       ) : null}
     >
       <Alert error={error} ok={okUnidades} />
-      {!ehMorador || unidades.length > 1 ? (
+      {comuns || !ehMorador || unidades.length > 1 ? (
         <div className="row chamado-filters">
           <label className="search-field">
             <Icon name="search" size={16} />
-            <input placeholder="Pesquisar unidade" value={q} onChange={(e) => setQ(e.target.value)} />
+            <input placeholder={comuns ? 'Pesquisar área' : 'Pesquisar unidade'} value={q} onChange={(e) => setQ(e.target.value)} />
           </label>
           <select value={filtro} onChange={(e) => setFiltro(e.target.value)}>
             <option value="">Todas ({unidades.length})</option>
@@ -705,28 +880,22 @@ export function RecebimentoPage() {
         <aside className="panel suporte-list rec-lista">
           {isGestaoTecnica && editando ? (
             <div className="rec-cadastro">
-              <Btn icon="plus" onClick={() => setUnidadeModal('nova')} disabled={busy}>Nova unidade</Btn>
+              <Btn icon="plus" onClick={() => setUnidadeModal('nova')} disabled={busy}>{comuns ? 'Nova área' : 'Nova unidade'}</Btn>
               <p className="hint">
                 {semOrdem
                   ? 'Para mudar a ordem, rode o arquivo supabase/unidades-ordem.sql no Supabase.'
                   : podeOrdenar
-                    ? 'Arraste as unidades para mudar a ordem.'
+                    ? `Arraste as ${cfg.itens} para mudar a ordem.`
                     : unidades.length > 1
                       ? 'Limpe a pesquisa e o filtro para arrastar e mudar a ordem.'
-                      : 'Cadastre os apartamentos do condomínio. Depois cada morador é ligado à sua unidade.'}
+                      : comuns
+                        ? 'Cadastre as áreas comuns do condomínio (piscina, salão de festas, hall…).'
+                        : 'Cadastre os apartamentos do condomínio. Depois cada morador é ligado à sua unidade.'}
               </p>
             </div>
           ) : null}
           {carregado && !visiveis.length ? (
-            <Empty
-              text={ehMorador
-                ? 'Seu usuário ainda não está ligado a uma unidade.'
-                : unidades.length
-                  ? 'Nenhuma unidade encontrada.'
-                  : isGestaoTecnica
-                    ? 'Nenhuma unidade cadastrada. Clique em "Editar tela" e depois em "Nova unidade".'
-                    : 'Nenhuma unidade cadastrada ainda.'}
-            />
+            <Empty text={vazio} />
           ) : visiveis.map((u) => {
             const conteudo = (
               <>
@@ -745,7 +914,7 @@ export function RecebimentoPage() {
             const classe = `suporte-item rec-item is-${u.status}${u.id === unidadeId ? ' active' : ''}`;
             if (!(isGestaoTecnica && editando)) {
               return (
-                <button type="button" key={u.id} className={classe} onClick={() => navigate(`/recebimento/${u.id}`)}>
+                <button type="button" key={u.id} className={classe} onClick={() => navigate(linkDe(u.id))}>
                   {conteudo}
                 </button>
               );
@@ -758,8 +927,8 @@ export function RecebimentoPage() {
                 tabIndex={0}
                 {...propsItem(u)}
                 className={[classe, 'rec-item--editando', podeOrdenar ? 'arr-ordenavel' : '', arrastandoId === u.id ? 'arr-lugar' : ''].filter(Boolean).join(' ')}
-                onClick={() => navigate(`/recebimento/${u.id}`)}
-                onKeyDown={(e) => { if (e.key === 'Enter') navigate(`/recebimento/${u.id}`); }}
+                onClick={() => navigate(linkDe(u.id))}
+                onKeyDown={(e) => { if (e.key === 'Enter') navigate(linkDe(u.id)); }}
               >
                 {podeOrdenar ? <span className="rec-item-pegador" aria-hidden="true"><Icon name="menu" size={16} /></span> : null}
                 <div className="rec-item-corpo">{conteudo}</div>
@@ -767,7 +936,7 @@ export function RecebimentoPage() {
                   <button
                     type="button"
                     className="rec-item-acao"
-                    title="Editar unidade"
+                    title={`Editar ${cfg.item}`}
                     aria-label={`Editar ${u.rotulo}`}
                     onClick={(e) => { e.stopPropagation(); setUnidadeModal(u); }}
                     disabled={busy}
@@ -777,7 +946,7 @@ export function RecebimentoPage() {
                   <button
                     type="button"
                     className="rec-item-acao is-perigo"
-                    title="Excluir unidade"
+                    title={`Excluir ${cfg.item}`}
                     aria-label={`Excluir ${u.rotulo}`}
                     onClick={(e) => { e.stopPropagation(); apagarUnidade(u); }}
                     disabled={busy}
@@ -792,16 +961,16 @@ export function RecebimentoPage() {
 
         <section className={`chat-shell suporte-chat${aberta ? '' : ' empty'}`}>
           {!aberta ? (
-            <Empty text={carregado ? 'Selecione uma unidade para abrir o chat.' : 'Carregando…'} />
+            <Empty text={carregado ? `Selecione uma ${cfg.item} para abrir o chat.` : 'Carregando…'} />
           ) : (
             <>
               <div className="chat-top">
-                <button type="button" className="suporte-back" onClick={() => navigate('/recebimento')}>
+                <button type="button" className="suporte-back" onClick={() => navigate(cfg.rota)}>
                   <Icon name="chevron" size={18} />
-                  Unidades
+                  {cfg.voltar}
                 </button>
                 <ChatHeader
-                  icon="door"
+                  icon={cfg.icone}
                   title={aberta.rotulo}
                   subtitle={aberta.status === 'ok' ? 'Entrega OK' : aberta.status === 'chat' ? 'Vistoria em andamento' : 'Sem vistoria'}
                 >
@@ -864,15 +1033,26 @@ export function RecebimentoPage() {
         onSalvar={salvarVistoria}
       />
 
-      <UnidadeModal
-        open={Boolean(unidadeModal)}
-        unidade={unidadeModal && unidadeModal !== 'nova' ? unidadeModal : null}
-        busy={busy}
-        onClose={() => setUnidadeModal(null)}
-        onCriar={criarNovas}
-        onEditar={salvarEdicaoUnidade}
-      />
+      {comuns ? (
+        <AreaModal
+          open={Boolean(unidadeModal)}
+          area={unidadeModal && unidadeModal !== 'nova' ? unidadeModal : null}
+          busy={busy}
+          condoId={condoId}
+          onClose={() => setUnidadeModal(null)}
+          onCriar={criarNovas}
+          onEditar={salvarEdicaoUnidade}
+        />
+      ) : (
+        <UnidadeModal
+          open={Boolean(unidadeModal)}
+          unidade={unidadeModal && unidadeModal !== 'nova' ? unidadeModal : null}
+          busy={busy}
+          onClose={() => setUnidadeModal(null)}
+          onCriar={criarNovas}
+          onEditar={salvarEdicaoUnidade}
+        />
+      )}
     </Page>
   );
 }
-

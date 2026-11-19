@@ -12191,3 +12191,89 @@ html[data-theme="escuro"] .portal { --rec-azul: #8fc7f5; --rec-verde: #6dca86; }
   color: #1d2b36;
 }
 .chat-event .rec-doc-info small { font-size: 12.5px; color: #5d6b75; }
+
+/* ---- Aviso de relógio errado e de sessão expirada ---- */
+.aviso-relogio {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 2000;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  width: min(640px, calc(100vw - 32px));
+  padding: 14px 14px 14px 16px;
+  border-radius: 16px;
+  border: 1px solid #f0c36d;
+  background: #fff8e6;
+  color: #4a3600;
+  box-shadow: 0 12px 32px rgba(40, 30, 0, 0.18);
+}
+.aviso-relogio-icone { color: #b7791f; padding-top: 1px; }
+.aviso-relogio-texto { display: grid; gap: 4px; font-size: 14px; line-height: 1.45; }
+.aviso-relogio-texto strong { font-size: 15px; }
+.aviso-relogio-fechar {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.aviso-relogio-fechar:hover { background: rgba(183, 121, 31, 0.15); }
+
+.auth-sessao-expirada {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid #f0c36d;
+  background: #fff8e6;
+  color: #4a3600;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* Portal da construtora: abas Áreas privativas / Áreas comuns */
+.rec-portal-abas {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: 14px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+.rec-portal-abas button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 16px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+.rec-portal-abas button.is-ativa { background: var(--pine); color: #fff; }
+.rec-portal-abas-n {
+  min-width: 22px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 16%, transparent);
+  font-size: 12px;
+  text-align: center;
+}
+.rec-area-locais { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid rgba(180, 214, 245, 0.25); }
+.rec-area-locais .hint { margin: 0; }
+.rec-area-locais .btn, .rec-area-locais button { justify-self: start; }

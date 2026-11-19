@@ -24,7 +24,7 @@ function EventoChatPortal({ registro }) {
     return (
       <div className="chat-event rec-evento-ok" role="status">
         <span className="rec-evento-ok-selo" aria-hidden="true"><Icon name="check" size={18} /></span>
-        <div className="chat-event-copy"><strong>Entrega OK</strong><span>Imóvel entregue sem pendências</span></div>
+        <div className="chat-event-copy"><strong>Entrega OK</strong><span>{registro.area_id ? 'Área entregue' : 'Imóvel entregue'} sem pendências</span></div>
         <time>{formatChatTime(registro.data_evento)}</time>
       </div>
     );
@@ -58,9 +58,18 @@ export function RecebimentoConstrutoraPage() {
   const [itens, setItens] = useState([]);
   const [texto, setTexto] = useState('');
   const [sending, setSending] = useState(false);
+  // Áreas privativas (apartamentos) ou áreas comuns.
+  const [aba, setAba] = useState('privativas');
   const chatLogRef = useRef(null);
 
   const aberto = chats.find((c) => c.unidadeId === unidadeId) || null;
+  const campoDe = (chat) => (chat?.tipo === 'comuns' ? 'area_id' : 'unidade_id');
+  const alvoDe = (chat) => (chat?.tipo === 'comuns' ? { areaId: chat.unidadeId } : { unidadeId: chat.unidadeId });
+
+  // Abriu um chat pelo link: mostra a aba certa.
+  useEffect(() => {
+    if (aberto?.tipo && aberto.tipo !== aba) setAba(aberto.tipo);
+  }, [aberto?.tipo]);
 
   async function loadLista() {
     try {
@@ -73,22 +82,23 @@ export function RecebimentoConstrutoraPage() {
     }
   }
 
-  async function loadChat(id = unidadeId) {
-    if (!id) { setItens([]); return; }
+  async function loadChat(id = unidadeId, chat = aberto) {
+    if (!id || !chat) { setItens([]); return; }
     try {
-      setItens(await carregarChatUnidade(id));
+      setItens(await carregarChatUnidade(id, campoDe(chat)));
     } catch (err) {
       setError(mensagemErroRecebimentoChat(err));
     }
   }
 
   useEffect(() => { loadLista(); }, []);
-  useEffect(() => { loadChat(unidadeId); }, [unidadeId]);
+  // O chat carrega quando a lista já disse se é unidade ou área comum.
+  useEffect(() => { loadChat(unidadeId, aberto); }, [unidadeId, aberto?.tipo]);
   useEffect(() => {
-    if (!unidadeId) return undefined;
-    const t = setInterval(() => { loadChat(unidadeId); loadLista(); }, 20000);
+    if (!unidadeId || !aberto) return undefined;
+    const t = setInterval(() => { loadChat(unidadeId, aberto); loadLista(); }, 20000);
     return () => clearInterval(t);
-  }, [unidadeId]);
+  }, [unidadeId, aberto?.tipo]);
   useEffect(() => {
     const el = chatLogRef.current;
     if (el) el.scrollTop = el.scrollHeight;
@@ -99,7 +109,13 @@ export function RecebimentoConstrutoraPage() {
     return [...mapa.entries()].sort((a, b) => String(a[1]).localeCompare(String(b[1]), 'pt-BR'));
   }, [chats]);
 
-  const filtrados = chats.filter((c) => (!condoFiltro || c.condominioId === condoFiltro)
+  const contagemAbas = useMemo(() => ({
+    privativas: chats.filter((c) => c.tipo !== 'comuns').length,
+    comuns: chats.filter((c) => c.tipo === 'comuns').length,
+  }), [chats]);
+
+  const filtrados = chats.filter((c) => (c.tipo === 'comuns' ? 'comuns' : 'privativas') === aba
+    && (!condoFiltro || c.condominioId === condoFiltro)
     && (!situacao || c.status === situacao)
     && `${c.rotulo} ${c.condominio} ${c.preview}`.toLowerCase().includes(q.trim().toLowerCase()));
 
@@ -117,7 +133,7 @@ export function RecebimentoConstrutoraPage() {
     if (!aberto || !texto.trim() || sending) return;
     setSending(true);
     try {
-      await enviarMensagemUnidade({ unidadeId: aberto.unidadeId, condominioId: aberto.condominioId, userId: session.user.id, texto });
+      await enviarMensagemUnidade({ ...alvoDe(aberto), condominioId: aberto.condominioId, userId: session.user.id, texto });
       setTexto('');
       await Promise.all([loadChat(), loadLista()]);
     } catch (err) {
@@ -131,7 +147,7 @@ export function RecebimentoConstrutoraPage() {
     if (!aberto || !file) return;
     setSending(true);
     try {
-      await enviarMensagemUnidade({ unidadeId: aberto.unidadeId, condominioId: aberto.condominioId, userId: session.user.id, texto: '', files: [file] });
+      await enviarMensagemUnidade({ ...alvoDe(aberto), condominioId: aberto.condominioId, userId: session.user.id, texto: '', files: [file] });
       await Promise.all([loadChat(), loadLista()]);
     } catch (err) {
       setError(mensagemErroRecebimentoChat(err));
@@ -150,9 +166,25 @@ export function RecebimentoConstrutoraPage() {
       <main className="portal-main wide">
         <div className="page-head">
           <h1>Recebimento</h1>
-          <p>Chats da vistoria de entrega com a Gestão Técnica, um por unidade.</p>
+          <p>Chats da vistoria de entrega com a Gestão Técnica: um por apartamento (áreas privativas) e um por área comum.</p>
         </div>
         <Alert error={error} />
+        <div className="rec-portal-abas" role="tablist">
+          {[['privativas', 'Áreas privativas', 'door'], ['comuns', 'Áreas comuns', 'building']].map(([id, rotulo, icone]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={aba === id}
+              className={aba === id ? 'is-ativa' : ''}
+              onClick={() => { setAba(id); if (aberto && aberto.tipo !== id) navigate('/construtora-recebimento'); }}
+            >
+              <Icon name={icone} size={16} />
+              {rotulo}
+              <span className="rec-portal-abas-n">{contagemAbas[id]}</span>
+            </button>
+          ))}
+        </div>
         <div className="row" style={{ marginBottom: 16 }}>
           <select value={condoFiltro} onChange={(e) => setCondoFiltro(e.target.value)}>
             <option value="">Todos os condomínios</option>
@@ -165,13 +197,13 @@ export function RecebimentoConstrutoraPage() {
           </select>
           <label className="search-field">
             <Icon name="search" size={16} />
-            <input placeholder="Pesquisar unidade ou condomínio" value={q} onChange={(e) => setQ(e.target.value)} />
+            <input placeholder={aba === 'comuns' ? 'Pesquisar área ou condomínio' : 'Pesquisar unidade ou condomínio'} value={q} onChange={(e) => setQ(e.target.value)} />
           </label>
         </div>
 
         <div className="suporte-layout">
           <aside className="panel suporte-list rec-lista">
-            {carregado && !grupos.length ? <Empty text="Nenhum chat de recebimento ainda." /> : grupos.map((grupo) => (
+            {carregado && !grupos.length ? <Empty text={aba === 'comuns' ? 'Nenhum chat de área comum ainda.' : 'Nenhum chat de recebimento ainda.'} /> : grupos.map((grupo) => (
               <section className="suporte-group" key={grupo.id}>
                 {!condoFiltro ? <h3>{grupo.nome}</h3> : null}
                 {grupo.items.map((c) => (
@@ -197,16 +229,16 @@ export function RecebimentoConstrutoraPage() {
 
           <section className={`chat-shell suporte-chat${aberto ? '' : ' empty'}`}>
             {!aberto ? (
-              <Empty text="Selecione uma unidade para abrir o chat." />
+              <Empty text={aba === 'comuns' ? 'Selecione uma área para abrir o chat.' : 'Selecione uma unidade para abrir o chat.'} />
             ) : (
               <>
                 <div className="chat-top">
-                  <ChatHeader icon="door" title={aberto.rotulo} subtitle={aberto.condominio}>
+                  <ChatHeader icon={aberto.tipo === 'comuns' ? 'building' : 'door'} title={aberto.rotulo} subtitle={aberto.condominio}>
                     <SeloRecebimento status={aberto.status} />
                     <Btn
                       variant="ghost"
                       icon="building"
-                      onClick={() => { selectCondo(aberto.condominioId); navigate(`/recebimento/${aberto.unidadeId}`); }}
+                      onClick={() => { selectCondo(aberto.condominioId); navigate(`${aberto.tipo === 'comuns' ? '/recebimento-areas-comuns' : '/recebimento'}/${aberto.unidadeId}`); }}
                     >
                       Abrir no condomínio
                     </Btn>

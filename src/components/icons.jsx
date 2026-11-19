@@ -113,6 +113,7 @@ export function navIconFor(to, cargoTipo) {
     '/garantias': 'shield',
     '/documentos': 'folder',
     '/recebimento': 'doorClosed',
+    '/recebimento-areas-comuns': 'building',
     '/manual-uso': 'book',
     '/meu-imovel': 'door',
     '/tipo-apto': 'layout',
